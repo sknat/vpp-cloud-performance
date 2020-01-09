@@ -1,0 +1,46 @@
+diff --git a/build/external/packages/dpdk.mk b/build/external/packages/dpdk.mk
+index a068210a5..20f774b07 100644
+--- a/build/external/packages/dpdk.mk
++++ b/build/external/packages/dpdk.mk
+@@ -198,7 +198,7 @@ $(B)/custom-config: $(B)/.dpdk-patch.ok Makefile
+ 	$(call set,RTE_LIBRTE_PMD_SOFTNIC,n)
+ 	$(call set,RTE_IBVERBS_LINK_DLOPEN,y)
+ 	$(call set,RTE_LIBRTE_PMD_TAP,$(DPDK_TAP_PMD))
+-	$(call set,RTE_LIBRTE_GSO,$(DPDK_TAP_PMD))
++	$(call set,RTE_LIBRTE_GSO,y)
+ 	$(call set,RTE_LIBRTE_PMD_FAILSAFE,$(DPDK_FAILSAFE_PMD))
+ 	@# not needed
+ 	$(call set,RTE_ETHDEV_RXTX_CALLBACKS,n)
+@@ -218,7 +218,7 @@ $(B)/custom-config: $(B)/.dpdk-patch.ok Makefile
+ 	$(call set,RTE_LIBRTE_PMD_SOFTNIC,n)
+ 	$(call set,RTE_LIBRTE_FLOW_CLASSIFY,n)
+ 	$(call set,RTE_LIBRTE_ACL,n)
+-	$(call set,RTE_LIBRTE_GRO,n)
++	$(call set,RTE_LIBRTE_GRO,y)
+ 	$(call set,RTE_LIBRTE_KNI,n)
+ 	$(call set,RTE_LIBRTE_BPF,n)
+ 	$(call set,RTE_LIBRTE_RAWDEV,n)
+@@ -227,9 +227,9 @@ $(B)/custom-config: $(B)/.dpdk-patch.ok Makefile
+ 	$(call set,RTE_LIBRTE_IFPGA_BUS,n)
+ 	$(call set,RTE_LIBRTE_BBDEV,n)
+ 	$(call set,RTE_LIBRTE_BBDEV_NULL,n)
+-	$(call set,RTE_TEST_PMD,n)
++	$(call set,RTE_TEST_PMD,y)
+ 	$(call set,RTE_KNI_KMOD,n)
+-	$(call set,RTE_EAL_IGB_UIO,n)
++	$(call set,RTE_EAL_IGB_UIO,y)
+ 	@# currently broken in 18.02
+ 	$(call set,RTE_LIBRTE_DPAA_BUS,n)
+ 	$(call set,RTE_LIBRTE_DPAA_MEMPOOL,n)
+diff --git a/src/plugins/dpdk/device/device.c b/src/plugins/dpdk/device/device.c
+index 3b41e93e0..323149043 100644
+--- a/src/plugins/dpdk/device/device.c
++++ b/src/plugins/dpdk/device/device.c
+@@ -199,6 +199,7 @@ static_always_inline
+ 	{
+ 	  /* no wrap, transmit in one burst */
+ 	  n_sent = rte_eth_tx_burst (xd->port_id, queue_id, mb, n_left);
++	  n_retry--;
+ 	}
+       else
+ 	{
