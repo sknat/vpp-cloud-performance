@@ -1,0 +1,142 @@
+commit 9c12c192faf8a016441ac6450459a414f0ce46f6
+Author: Benoît Ganne <bganne@cisco.com>
+Date:   Wed Jan 15 18:04:16 2020 +0100
+
+    ena: multiple txq
+    
+    Change-Id: Ic354ce030d2b122edf3dae2be8b4bc6f4156039f
+
+diff --git a/src/plugins/dpdk/device/device.c b/src/plugins/dpdk/device/device.c
+index 323149043..4bc73ca40 100644
+--- a/src/plugins/dpdk/device/device.c
++++ b/src/plugins/dpdk/device/device.c
+@@ -15,6 +15,7 @@
+ #include <vnet/vnet.h>
+ #include <vppinfra/vec.h>
+ #include <vppinfra/format.h>
++#include <vppinfra/crc32.h>
+ #include <vlib/unix/cj.h>
+ #include <assert.h>
+ 
+@@ -147,6 +148,57 @@ dpdk_validate_rte_mbuf (vlib_main_t * vm, vlib_buffer_t * b,
+     }
+ }
+ 
++static_always_inline u32
++tx_burst_vector_internal_mq (vlib_main_t * vm, vlib_node_runtime_t * node, dpdk_device_t * xd, struct rte_mbuf **mb, u32 n_left)
++{
++  static __thread struct rte_mbuf *tx[DPDK_NB_TX_PER_WORKER][VLIB_FRAME_SIZE];
++  vlib_buffer_t *b;
++  const ethernet_header_t *eth;
++  const ip4_header_t *ip;
++  u32 hash, qid, txidx[DPDK_NB_TX_PER_WORKER] = {}, n = n_left;
++  int i, j, sent[DPDK_NB_TX_PER_WORKER];
++
++  while (n > 0)
++    {
++      b  = vlib_buffer_from_rte_mbuf (mb[0]);
++      eth = vlib_buffer_get_current (b);
++      ip = (void *)(eth + 1);
++      hash = clib_crc32c((void *)&ip->address_pair, sizeof(ip->address_pair));
++      qid = hash % DPDK_NB_TX_PER_WORKER;
++      tx[qid][txidx[qid]] = mb[0];
++      txidx[qid]++;
++      mb++;
++      n--;
++    }
++
++  for (i=0; i<DPDK_NB_TX_PER_WORKER; i++)
++    {
++      sent[i] = rte_eth_tx_burst (xd->port_id, vm->thread_index * DPDK_NB_TX_PER_WORKER + i, tx[i], txidx[i]);
++      if (PREDICT_FALSE(sent[i] < 0))
++        {
++          clib_warning ("rte_eth_tx_burst[%d]: error %d", xd->port_id, sent);
++          sent[i] = 0;
++        }
++    }
++
++  for (i=0; i<DPDK_NB_TX_PER_WORKER; i++)
++    {
++      int err = txidx[i] - sent[i];
++      if (PREDICT_FALSE(err > 0))
++        {
++          vlib_simple_counter_main_t *cm;
++          vnet_main_t *vnm = vnet_get_main ();
++          cm = vec_elt_at_index (vnm->interface_main.sw_if_counters, VNET_INTERFACE_COUNTER_TX_ERROR);
++          vlib_increment_simple_counter (cm, vm->thread_index, xd->sw_if_index, err);
++          vlib_error_count (vm, node->node_index, DPDK_TX_FUNC_ERROR_PKT_DROP, err);
++          for (j=0; j<err; j++)
++            rte_pktmbuf_free (tx[i][sent[i]+j]);
++        }
++    }
++
++  return n_left;
++}
++
+ /*
+  * This function calls the dpdk's tx_burst function to transmit the packets.
+  * It manages a lock per-device if the device does not
+@@ -164,6 +216,7 @@ static_always_inline
+   int queue_id;
+ 
+   n_retry = 16;
++
+   queue_id = vm->thread_index;
+ 
+   do
+@@ -453,6 +506,7 @@ VNET_DEVICE_CLASS_TX_FN (dpdk_device_class) (vlib_main_t * vm,
+ 
+   /* transmit as many packets as possible */
+   tx_pkts = n_packets = mb - ptd->mbufs;
++#if 0
+   n_left = tx_burst_vector_internal (vm, xd, ptd->mbufs, n_packets);
+ 
+   {
+@@ -476,6 +530,9 @@ VNET_DEVICE_CLASS_TX_FN (dpdk_device_class) (vlib_main_t * vm,
+ 	  rte_pktmbuf_free (ptd->mbufs[n_packets - n_left - 1]);
+       }
+   }
++#else
++  tx_pkts = tx_burst_vector_internal_mq (vm, node, xd, ptd->mbufs, n_packets);
++#endif
+ 
+   return tx_pkts;
+ }
+diff --git a/src/plugins/dpdk/device/dpdk.h b/src/plugins/dpdk/device/dpdk.h
+index ab28ac06a..ba502e611 100644
+--- a/src/plugins/dpdk/device/dpdk.h
++++ b/src/plugins/dpdk/device/dpdk.h
+@@ -379,6 +379,7 @@ typedef struct
+ 
+ extern dpdk_config_main_t dpdk_config_main;
+ 
++#define DPDK_TXQ_PER_WORKER     2
+ #define DPDK_RX_BURST_SZ VLIB_FRAME_SIZE
+ 
+ typedef struct
+diff --git a/src/plugins/dpdk/device/dpdk_priv.h b/src/plugins/dpdk/device/dpdk_priv.h
+index 0b1fe92bf..81aa9344b 100644
+--- a/src/plugins/dpdk/device/dpdk_priv.h
++++ b/src/plugins/dpdk/device/dpdk_priv.h
+@@ -13,6 +13,8 @@
+  * limitations under the License.
+  */
+ 
++#define DPDK_NB_TX_PER_WORKER     2
++
+ #define DPDK_NB_RX_DESC_DEFAULT   1024
+ #define DPDK_NB_TX_DESC_DEFAULT   1024
+ #define DPDK_NB_RX_DESC_VIRTIO    256
+diff --git a/src/plugins/dpdk/device/init.c b/src/plugins/dpdk/device/init.c
+index d0125e939..40f1df9c9 100644
+--- a/src/plugins/dpdk/device/init.c
++++ b/src/plugins/dpdk/device/init.c
+@@ -368,7 +368,7 @@ dpdk_lib_init (dpdk_main_t * dm)
+ 	  xd->flags |= DPDK_DEVICE_FLAG_MAYBE_MULTISEG;
+ 	}
+ 
+-      xd->tx_q_used = clib_min (dev_info.max_tx_queues, tm->n_vlib_mains);
++      xd->tx_q_used = clib_min (dev_info.max_tx_queues, tm->n_vlib_mains * DPDK_NB_TX_PER_WORKER);
+ 
+       if (devconf->num_tx_queues > 0
+ 	  && devconf->num_tx_queues < xd->tx_q_used)

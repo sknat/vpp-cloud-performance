@@ -1,0 +1,13 @@
+diff --git a/src/plugins/dpdk/device/device.c b/src/plugins/dpdk/device/device.c
+index 323149043..ec3802b73 100644
+--- a/src/plugins/dpdk/device/device.c
++++ b/src/plugins/dpdk/device/device.c
+@@ -230,6 +230,8 @@ static_always_inline
+     }
+   while (n_sent && n_left && (n_retry > 0));
+ 
++  sched_yield();
++
+   return n_left;
+ }
+ 
