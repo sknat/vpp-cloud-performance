@@ -13,6 +13,7 @@ NRUN=${NRUN-3} # Number of test runs
 CP=${CP-""} # compact workers on one thread
 BIDI=${BIDI-""} # bidirectional iperf3 (one out of two is reversed)
 AES=${AES-256} # aes-gcm-128 or aes-gcm-256
+LLQ=${LLQ-""} # 1 ti enable LLQ
 
 VM1_IP=20.0.2.1
 VM1_IP_PREFIX=20.0.2/24
@@ -318,7 +319,7 @@ buffers {
    default data-size 8192
 }
 " | sudo tee $VPP_RUN_DIR/vpp.conf > /dev/null
-  sudo sysctl -w vm.nr_hugepages=512
+  sudo sysctl -w vm.nr_hugepages=2048
 }
 
 configure_vpp_nic_drivers ()
@@ -365,7 +366,8 @@ set ip neighbor $ROUTER_VM2_NAME ${VM2_IP_IT[$i]} ${VM2_MAC//[$'\r']}
 run_vpp ()
 {
   sudo ln -s $VPPCTLBIN /usr/local/bin/vppctl || true
-  sudo $VPPBIN -c $VPP_RUN_DIR/vpp.conf
+  echo "LLQ is $LLQ"
+  sudo DPDK_ENA_LLQ_ENABLE=$LLQ $VPPBIN -c $VPP_RUN_DIR/vpp.conf
   if [[ "$CP" != "" ]]; then
     echo "compacting vpp workers"
     sleep 1
@@ -483,10 +485,10 @@ aws_test_cli ()
   if [[ "$1" = "dns" ]]; then
     sync_dns
   elif [[ "$1" = "sync" ]]; then
-    sync vm1
-    sync vm2
-    sync switch
-    sync switch2
+    sync $2.vm1
+    sync $2.vm2
+    sync $2.switch
+    sync $2.switch2
   elif [[ "$1" = "install" ]]; then
     install_deps
   elif [[ "$1" = "raw" ]]; then
