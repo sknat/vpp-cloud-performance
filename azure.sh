@@ -8,10 +8,7 @@ IDENTITY_FILE=~/nskrzypc-key.pem
 
 MTU=${MTU-1500}
 WRK=${WRK-4} # N workers
-TIME=${TIME-20} # test duration
-NRUN=${NRUN-3} # Number of test runs
 CP=${CP-""} # compact workers on one thread
-BIDI=${BIDI-""} # bidirectional iperf3 (one out of two is reversed)
 AES=${AES-256} # aes-gcm-128 or aes-gcm-256
 LLQ=${LLQ-""} # 1 ti enable LLQ
 
@@ -69,6 +66,12 @@ VM2_IP2_PREFIX=20.0.4.192/26
 VM2_LAST_IP2=20.0.4.255
 VM2_IF2=eth2
 
+VM2_BASE_IP3=20.0.2.13
+VM2_IP3=20.0.2.192
+VM2_IP3_PREFIX=20.0.2.192/26
+VM2_LAST_IP3=20.0.2.255
+VM2_IF3=eth3
+
 if [[ "$AES" = "256" ]]; then
   CRYPTO_KEY=6541686776336961656264656f6f65796541686776336961656264656f6f6579
   CRYPTO_ALG=aes-gcm-256
@@ -101,34 +104,9 @@ ip_it ()
 VM1_IP_IT=($(ip_it $VM1_IP $VM1_LAST_IP))
 VM2_IP_IT=($(ip_it $VM2_IP $VM2_LAST_IP))
 VM2_IP2_IT=($(ip_it $VM2_IP2 $VM2_LAST_IP2))
+VM2_IP3_IT=($(ip_it $VM2_IP3 $VM2_LAST_IP3))
 ROUTER_VM2_IP_IT=($(ip_it $ROUTER_VM2_IP $ROUTER_VM2_LAST_IP))
 ROUTER2_VM1_IP_IT=($(ip_it $ROUTER2_VM1_IP $ROUTER2_VM1_LAST_IP))
-
-SOURCE="${BASH_SOURCE[0]}"
-while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symlink
-  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
-  SOURCE="$(readlink "$SOURCE")"
-  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
-done
-SCRIPTDIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
-if [[ -f .me ]]; then
-  ME=$(cat ~/.me)
-else
-  ME=""
-fi
-
-run_ () {
-  if [[ "$1" = "$ME" ]]; then
-    ${@:2}
-  else
-    ssh ubuntu@$1 -i $IDENTITY_FILE -t ${@:2}
-  fi
-}
-srun_ () {
-  run_ $1 "sudo ${@:2}";
-}
-
-get_mac () { run_ $1 "sed -n 1p /sys/class/net/$2/address" ; }
 
 configure_test_pmd ()
 {
@@ -139,19 +117,20 @@ configure_test_pmd ()
   sudo $TESTPMD                               \
     -w $ROUTER_VM1_IF_PCI                     \
     -w $ROUTER_VM2_IF_PCI                     \
-    --vdev="net_vdev_netvsc0,iface=eth1"      \
-    --vdev="net_vdev_netvsc1,iface=eth2"      \
+    --vdev="net_vdev_netvsc0,iface=eth1,force=1"      \
+    --vdev="net_vdev_netvsc1,iface=eth2,force=1"      \
     -l 0,1,2,3,4,5                            \
-    -- -i \
-    --eth-peer=2,${AZURE_RT_MAC//[$'\r']}          \
-    --eth-peer=4,${AZURE_RT_MAC//[$'\r']}          
-    # -a                                     \
-    # --forward-mode=mac                        \
-    # --burst=32                                \
-    # --rss                                     \
-    # --rxq=$WRK                                \
-    # --txq=$WRK                                \
-    # --nb-cores=$WRK                           \
+    --                                        \
+    -i \
+    --eth-peer=4,${AZURE_RT_MAC//[$'\r']}     \
+    --eth-peer=2,${AZURE_RT_MAC//[$'\r']}     \
+    -a                                        \
+    --forward-mode=mac                        \
+    --burst=32                                \
+    --rss                                     \
+    --rxq=$WRK                                \
+    --txq=$WRK                                \
+    --nb-cores=$WRK
     # --stats-period 1
 }
 
@@ -166,28 +145,53 @@ configure_vm1 ()
   for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
     sudo ip addr add ${VM1_IP_IT[$i]}/26 dev $VM1_IF || true
   done
+  sudo ip route add $VM2_IP_PREFIX dev $VM1_IF via $ROUTER_VM1_IP || true
   sudo ip route add $VM2_IP2_PREFIX dev $VM1_IF via $ROUTER_VM1_IP || true
+  sudo ip route add $VM2_IP3_PREFIX dev $VM1_IF via $VM2_BASE_IP3 || true
 
   sudo ip link set $VM1_IF mtu $MTU
 }
 
 configure_vm2 ()
 {
+  if [[ "$1" = "" ]]; then
+     echo "please provide zero|one|two"
+     exit 1
+  fi
   # OK
+  # if1
   sudo ip link set $VM2_IF down
-  sudo ip link set $VM2_IF2 down
   sudo ip link set $VM2_IF up
-  sudo ip link set $VM2_IF2 up
   sudo ip addr flush dev $VM2_IF
+
+  # if2
+  sudo ip link set $VM2_IF2 down
+  sudo ip link set $VM2_IF2 up
   sudo ip addr flush dev $VM2_IF2
+
+  # if3
+  sudo ip link set $VM2_IF3 down
+  sudo ip link set $VM2_IF3 up
+  sudo ip addr flush dev $VM2_IF3
+
   sudo ip route del $VM1_IP_PREFIX || true
 
   for ((i = 0; i < ${#VM1_IP_IT[@]}; i++)); do
     sudo ip addr add ${VM2_IP_IT[$i]}/26 dev $VM2_IF || true
     sudo ip addr add ${VM2_IP2_IT[$i]}/26 dev $VM2_IF2 || true
+    sudo ip addr add ${VM2_IP3_IT[$i]}/26 dev $VM2_IF3 || true
   done
-  # one hop route to VM1
-  sudo ip route add $VM1_IP_PREFIX dev $VM2_IF2 via $ROUTER_VM2_BASE_IP || true
+  if [[ "$1" = "one" ]] ; then
+    # one hop route to VM1
+    sudo ip route add $VM1_IP_PREFIX dev $VM2_IF2 via $ROUTER_VM2_BASE_IP || true
+  elif [[ "$1" = "zero" ]]; then
+    # zero hop route to VM1
+    sudo ip route add $VM1_IP_PREFIX dev $VM2_IF3 via $VM1_BASE_IP || true
+  elif [[ "$1" = "two" ]]; then
+    echo "Not implem"
+  else
+    echo "Wot ?"
+  fi
 
   sudo ip link set $VM2_IF mtu $MTU
 }
@@ -212,7 +216,7 @@ configure_linux_router ()
 
 install_deps ()
 {
-  if [[ "$ME" = "vm1" ]] || [[ "$ME" = "vm2" ]]; then
+  if [[ "$1" = "vm1" ]] || [[ "$1" = "vm2" ]]; then
     sudo apt update && sudo apt install -y iperf iperf3 traceroute
   else
     sudo apt update && sudo apt install -y \
@@ -227,98 +231,20 @@ install_deps ()
     git clone https://gerrit.fd.io/r/vpp || true
     cd vpp
     git fetch "https://gerrit.fd.io/r/vpp" refs/changes/89/24289/1 && git checkout FETCH_HEAD
-    git apply ~/mlx4_pmd.patch
+    git apply ~/test/patch/mlx4_pmd.patch
     make install-dep
     make build-release
     cd ~/
     wget https://fast.dpdk.org/rel/dpdk-18.02.2.tar.xz
     tar -xvf dpdk-18.02.2.tar.xz
     cd dpdk-stable-18.02.2/config
-    patch -R common_base ~/dpdk-18.02.patch
+    patch -R common_base ~/test/patch/dpdk-18.02.patch
     cd ..
     make config T=x86_64-native-linuxapp-gcc
     sed -ri 's,(MLX._PMD=)n,\1y,' build/.config
     make
     make install T=x86_64-native-linuxapp-gcc DESTDIR=~/dpdk EXTRA_CFLAGS='-fPIC -pie'
   fi
-}
-
-sync_dns ()
-{
-  echo "Syncing hostnames"
-  grep -q "^$VM1_MANAGEMENT_IP" /etc/hosts && sudo sed -i "s/^$VM1_MANAGEMENT_IP.*/$VM1_MANAGEMENT_IP vm1/" /etc/hosts || echo "$VM1_MANAGEMENT_IP vm1" | sudo tee -a /etc/hosts
-  grep -q "^$VM2_MANAGEMENT_IP" /etc/hosts && sudo sed -i "s/^$VM2_MANAGEMENT_IP.*/$VM2_MANAGEMENT_IP vm2/" /etc/hosts || echo "$VM2_MANAGEMENT_IP vm2" | sudo tee -a /etc/hosts
-  grep -q "^$ROUTER2_MANAGEMENT_IP" /etc/hosts && sudo sed -i "s/^$ROUTER2_MANAGEMENT_IP.*/$ROUTER2_MANAGEMENT_IP switch2/" /etc/hosts || echo "$ROUTER2_MANAGEMENT_IP switch2" | sudo tee -a /etc/hosts
-  grep -q "^$ROUTER_MANAGEMENT_IP" /etc/hosts && sudo sed -i "s/^$ROUTER_MANAGEMENT_IP.*/$ROUTER_MANAGEMENT_IP switch/" /etc/hosts || echo "$ROUTER_MANAGEMENT_IP switch" | sudo tee -a /etc/hosts
-}
-
-# BPS=$(cat ~/$1.P$NTHREAD.run$RUN.client.json | jq '.end.sum_received.bits_per_second / 1000000000')
-test_client ()
-{
-  if [[ "$1" = "" ]]; then
-    echo "Please provide a name"
-    exit
-  fi
-  echo "starting tests, $TIME sec per test"
-  for RUN in 1 2 3 ; do
-  for NTHREAD in 1 4 8 16 ; do
-    FNAME="$1.P$NTHREAD.run$RUN"
-    run_ $VM1_MANAGEMENT_IP "nohup iperf3 -s -D -I ~/iperf3.pid --logfile ~/$FNAME.server > /dev/null 2>&1" > /dev/null 2>&1
-    iperf3 -c vm1 -i 1 -t $TIME -P$NTHREAD ${@:2} > ~/$FNAME.client
-    run_ $VM1_MANAGEMENT_IP 'kill `cat ~/iperf3.pid`' > /dev/null 2>&1
-    sed -i -e "1i COMMAND::iperf3 -c vm1 -i 1 -t $TIME -P$NTHREAD ${@:2}" ~/$FNAME.client
-    BPS=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Gbits/s")
-    echo "$FNAME : $BPS"
-  done
-  done
-}
-
-test_parallel_clients ()
-{
-  if [[ "$1" = "" ]] || [[ "$2" = "" ]]; then
-    echo "Please provide a name & a number of iperfs"
-    exit
-  fi
-  NFORKS=$2
-  mkdir -p ~/currentrun
-  run_ $VM1_MANAGEMENT_IP "mkdir -p ~/currentrun"
-  srun_ $VM1_MANAGEMENT_IP "pkill iperf3" > /dev/null 2>&1 || true
-  echo "Testing with $NFORKS iperfs, ${TIME}s per test"
-  NTHREAD=1
-  for RUN in $(seq $NRUN) ; do
-  for ((fork = 0; fork < $NFORKS; fork++)); do
-    FNAME="currentrun/$1.${NFORKS}t.P$NTHREAD.run$RUN.fork$fork"
-    run_ $VM1_MANAGEMENT_IP "nohup iperf3 -s -B ${VM1_IP_IT[$fork]} -D -I ~/iperf3.fork$fork.pid --logfile ~/$FNAME.server > /dev/null 2>&1" > /dev/null 2>&1
-  done
-  for ((fork = 0; fork < $NFORKS; fork++)); do
-    FNAME="currentrun/$1.${NFORKS}t.P$NTHREAD.run$RUN.fork$fork"
-    if [[ "$BIDI" != "" ]] && [[ $((fork%2)) = 1 ]]; then
-          REVERSED="-R"
-    else
-          REVERSED=""
-    fi
-    iperf3 $REVERSED -c ${VM1_IP_IT[$fork]} -B ${VM2_IP_IT[$fork]} -i 1 -t $TIME -P$NTHREAD ${@:3} --logfile ~/$FNAME.client > /dev/null 2>&1 &
-    echo "$!" > ~/iperf3.fork$fork.pid
-  done
-  BPS=0
-  for ((fork = 0; fork < $NFORKS; fork++)); do
-    FNAME="currentrun/$1.${NFORKS}t.P$NTHREAD.run$RUN.fork$fork"
-    if [[ "$BIDI" != "" ]] && [[ $((fork%2)) = 1 ]]; then
-          REVERSED="-R"
-    else
-          REVERSED=""
-    fi
-    wait $(cat ~/iperf3.fork$fork.pid)
-    rm ~/iperf3.fork$fork.pid
-    sed -i -e "1i COMMAND::iperf3 $REVERSED -c ${VM1_IP_IT[$fork]} -B ${VM2_IP_IT[$fork]} -i 1 -t $TIME -P$NTHREAD ${@:3}" ~/$FNAME.client
-    run_ $VM1_MANAGEMENT_IP "kill \$(cat ~/iperf3.fork$fork.pid)" > /dev/null 2>&1
-    BPSG_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Gbits/s" | egrep -o "[0-9\.]+" || echo "0")
-    BPSM_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Mbits/s" | egrep -o "[0-9\.]+" || echo "0")
-    BPSK_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Kbits/s" | egrep -o "[0-9\.]+" || echo "0")
-    BPS=$(echo $BPS $BPSG_ $BPSM_ $BPSK_ | awk '{print $1 + $2 + ($3 / 1000) + ($4 / 1000000)}')
-  done
-  echo "$1.${NFORKS}t.P$NTHREAD.run$RUN : $BPS Gbits/s"
-  done
 }
 
 create_vpp_startup_conf ()
@@ -341,24 +267,21 @@ cpu {
   corelist-workers $CORELIST_WORKERS
 }
 dpdk {
-  uio-driver ib_uverbs
   dev default { num-rx-queues $WRK num-rx-desc 1024 }
   dev $ROUTER_VM1_IF_PCI
   dev $ROUTER_VM2_IF_PCI
   vdev net_vdev_netvsc0,iface=eth1
   vdev net_vdev_netvsc1,iface=eth2
 }
-buffers {
-   buffers-per-numa 262144
-   default data-size 8192
-}
 " | sudo tee $VPP_RUN_DIR/vpp.conf > /dev/null
-  sudo sysctl -w vm.nr_hugepages=2048
 }
 
 configure_vpp ()
 {
   sudo pkill vpp || true
+  sudo modprobe -a ib_uverbs
+  sudo modprobe mlx4_ib
+  sudo sysctl -w vm.nr_hugepages=1024
   create_vpp_startup_conf
 # set int ip address $ROUTER_VM1_NAME $ROUTER_VM1_IP/24
 # set int ip address $ROUTER_VM2_NAME $ROUTER_VM2_BASE_IP/24
@@ -407,16 +330,6 @@ unconfigure_all ()
   sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM2_IF_PCI
   sudo ip link set $ROUTER_VM1_IF down
   sudo ip link set $ROUTER_VM2_IF down
-}
-
-sync ()
-{
-  rsync -avz              \
-    --exclude=results     \
-    --exclude=.gitignore  \
-    --exclude=.git        \
-    $SCRIPTDIR/ az.$1:~/
-  ssh az.$1 -t "echo $1 > .me"
 }
 
 configure_vpp_ipsec_1 ()
@@ -506,15 +419,8 @@ ip route add ${ROUTER_VM2_IP_IT[$i]}/32 via $ROUTER2_VM1_NAME
 
 aws_test_cli ()
 {
-  if [[ "$1" = "dns" ]]; then
-    sync_dns
-  elif [[ "$1" = "sync" ]]; then
-    # sync vm1
-    # sync vm2
-    sync switch
-    # sync switch2
-  elif [[ "$1" = "install" ]]; then
-    install_deps
+  if [[ "$1" = "install" ]]; then
+    install_deps ${@:2}
   elif [[ "$1" = "pmd" ]]; then
     configure_test_pmd
   elif [[ "$1" = "linux" ]]; then
@@ -526,32 +432,15 @@ aws_test_cli ()
   elif [[ "$1" = "ipsec2" ]]; then
     configure_vpp_ipsec_2 ${@:2}
   # VM configuration
-  elif [[ "$1 $2" = "vm1 router" ]]; then
-    configure_vm1 $ROUTER_VM1_MAC
-  elif [[ "$1 $2" = "vm2 router" ]]; then
-    configure_vm2 $ROUTER_VM2_MAC
-  elif [[ "$1 $2" = "vm1 ipsec" ]]; then
-    configure_vm1 $ROUTER_VM1_MAC
-  elif [[ "$1 $2" = "vm2 ipsec" ]]; then
-    configure_vm2 $ROUTER2_VM2_MAC
-  elif [[ "$1 $2" = "vm1 raw" ]]; then
-    configure_vm1 $VM2_MAC
-  elif [[ "$1 $2" = "vm2 raw" ]]; then
-    configure_vm2 $VM1_MAC
-  elif [[ "$1" = "test" ]]; then
-    test_client ${@:2}
-  elif [[ "$1" = "ptest" ]]; then
-    test_parallel_clients ${@:2}
+  elif [[ "$1" = "vm1" ]]; then
+    configure_vm1
+  elif [[ "$1" = "vm2" ]]; then
+    configure_vm2 $2
   else
     echo "Usage:"
-    echo "aws.sh sync [HOST]  - sync this script to the host HOST"
-    echo "aws.sh dns          - Add /etc/hosts entries with names vm1/vm2/switch"
-    echo "aws.sh install      - install deps"
-    echo "aws.sh raw          - configure back to back instances"
-    echo "aws.sh pmd          - configure testpmd"
-    echo "aws.sh linux        - configure linux router"
-    echo "aws.sh vpp [uio]    - configure vpp"
-    echo "aws.sh test [NAME]  - run tests"
+    echo "aws.sh sync                                              - sync this script"
+    echo "aws.sh install                                           - install deps"
+    echo "aws.sh ptest [zero|one|two] [NAME] [Nparallel] [OPTIONS] - run tests"
   fi
 }
 

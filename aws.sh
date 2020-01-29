@@ -4,14 +4,10 @@ set -e
 
 # ------------------------------
 
-IDENTITY_FILE=~/nskrzypc-key.pem
 
 MTU=${MTU-1500}
 WRK=${WRK-4} # N workers
-TIME=${TIME-20} # test duration
-NRUN=${NRUN-3} # Number of test runs
 CP=${CP-""} # compact workers on one thread
-BIDI=${BIDI-""} # bidirectional iperf3 (one out of two is reversed)
 AES=${AES-256} # aes-gcm-128 or aes-gcm-256
 LLQ=${LLQ-""} # 1 ti enable LLQ
 
@@ -26,11 +22,6 @@ ROUTER_VM2_MAC=02:c2:c6:31:b4:16
 ROUTER2_VM1_MAC=02:1c:0d:2a:ab:1a
 ROUTER2_VM2_MAC=02:59:9f:b7:3e:06
 VM2_MAC=02:56:5b:e5:38:22
-
-VM1_MANAGEMENT_IP=20.0.1.1
-ROUTER_MANAGEMENT_IP=20.0.8.2
-ROUTER2_MANAGEMENT_IP=20.0.8.3
-VM2_MANAGEMENT_IP=20.0.1.4
 
 # ROUTER interface towards VM1
 ROUTER_VM1_IF=ens6
@@ -96,32 +87,6 @@ VM1_IP_IT=($(ip_it $VM1_IP $VM1_LAST_IP))
 VM2_IP_IT=($(ip_it $VM2_IP $VM2_LAST_IP))
 ROUTER_VM2_IP_IT=($(ip_it $ROUTER_VM2_IP $ROUTER_VM2_LAST_IP))
 ROUTER2_VM1_IP_IT=($(ip_it $ROUTER2_VM1_IP $ROUTER2_VM1_LAST_IP))
-
-SOURCE="${BASH_SOURCE[0]}"
-while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symlink
-  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
-  SOURCE="$(readlink "$SOURCE")"
-  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
-done
-SCRIPTDIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
-if [[ -f .me ]]; then
-  ME=$(cat ~/.me)
-else
-  ME=""
-fi
-
-run_ () {
-  if [[ "$1" = "$ME" ]]; then
-    ${@:2}
-  else
-    ssh ubuntu@$1 -i $IDENTITY_FILE -t ${@:2}
-  fi
-}
-srun_ () {
-  run_ $1 "sudo ${@:2}";
-}
-
-get_mac () { run_ $1 "sed -n 1p /sys/class/net/$2/address" ; }
 
 configure_test_pmd ()
 {
@@ -198,96 +163,18 @@ configure_linux_router ()
 
 install_deps ()
 {
-  if [[ "$ME" = "vm1" ]] || [[ "$ME" = "vm2" ]]; then
+  if [[ "$1" = "vm1" ]] || [[ "$1" = "vm2" ]]; then
     sudo apt update && sudo apt install -y iperf iperf3 traceroute
   else
     sudo apt update && sudo apt install -y iperf iperf3 traceroute make python linux-tools-$(uname -r) linux-tools-generic
     git clone https://gerrit.fd.io/r/vpp || true
     cd vpp
     git fetch "https://gerrit.fd.io/r/vpp" refs/changes/89/24289/1 && git checkout FETCH_HEAD
-    git apply ~/vpp-dpdk.patch
-    git apply ~/dpdk-mq.patch
+    git apply ~/test/patch/vpp-dpdk.patch
+    git apply ~/test/patch/dpdk-mq.patch
     make install-dep
     make build-release
   fi
-}
-
-sync_dns ()
-{
-  echo "Syncing hostnames"
-  grep -q "^$VM1_MANAGEMENT_IP" /etc/hosts && sudo sed -i "s/^$VM1_MANAGEMENT_IP.*/$VM1_MANAGEMENT_IP vm1/" /etc/hosts || echo "$VM1_MANAGEMENT_IP vm1" | sudo tee -a /etc/hosts
-  grep -q "^$VM2_MANAGEMENT_IP" /etc/hosts && sudo sed -i "s/^$VM2_MANAGEMENT_IP.*/$VM2_MANAGEMENT_IP vm2/" /etc/hosts || echo "$VM2_MANAGEMENT_IP vm2" | sudo tee -a /etc/hosts
-  grep -q "^$ROUTER2_MANAGEMENT_IP" /etc/hosts && sudo sed -i "s/^$ROUTER2_MANAGEMENT_IP.*/$ROUTER2_MANAGEMENT_IP switch2/" /etc/hosts || echo "$ROUTER2_MANAGEMENT_IP switch2" | sudo tee -a /etc/hosts
-  grep -q "^$ROUTER_MANAGEMENT_IP" /etc/hosts && sudo sed -i "s/^$ROUTER_MANAGEMENT_IP.*/$ROUTER_MANAGEMENT_IP switch/" /etc/hosts || echo "$ROUTER_MANAGEMENT_IP switch" | sudo tee -a /etc/hosts
-}
-
-# BPS=$(cat ~/$1.P$NTHREAD.run$RUN.client.json | jq '.end.sum_received.bits_per_second / 1000000000')
-test_client ()
-{
-  if [[ "$1" = "" ]]; then
-    echo "Please provide a name"
-    exit
-  fi
-  echo "starting tests, $TIME sec per test"
-  for RUN in 1 2 3 ; do
-  for NTHREAD in 1 4 8 16 ; do
-    FNAME="$1.P$NTHREAD.run$RUN"
-    run_ $VM1_MANAGEMENT_IP "nohup iperf3 -s -D -I ~/iperf3.pid --logfile ~/$FNAME.server > /dev/null 2>&1" > /dev/null 2>&1
-    iperf3 -c vm1 -i 1 -t $TIME -P$NTHREAD ${@:2} > ~/$FNAME.client
-    run_ $VM1_MANAGEMENT_IP 'kill `cat ~/iperf3.pid`' > /dev/null 2>&1
-    sed -i -e "1i COMMAND::iperf3 -c vm1 -i 1 -t $TIME -P$NTHREAD ${@:2}" ~/$FNAME.client
-    BPS=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Gbits/s")
-    echo "$FNAME : $BPS"
-  done
-  done
-}
-
-test_parallel_clients ()
-{
-  if [[ "$1" = "" ]] || [[ "$2" = "" ]]; then
-    echo "Please provide a name & a number of iperfs"
-    exit
-  fi
-  NFORKS=$2
-  mkdir -p ~/currentrun
-  run_ $VM1_MANAGEMENT_IP "mkdir -p ~/currentrun"
-  srun_ $VM1_MANAGEMENT_IP "pkill iperf3" > /dev/null 2>&1 || true
-  echo "Testing with $NFORKS iperfs, ${TIME}s per test"
-  NTHREAD=1
-  for RUN in $(seq $NRUN) ; do
-  for ((fork = 0; fork < $NFORKS; fork++)); do
-    FNAME="currentrun/$1.${NFORKS}t.P$NTHREAD.run$RUN.fork$fork"
-    run_ $VM1_MANAGEMENT_IP "nohup iperf3 -s -B ${VM1_IP_IT[$fork]} -D -I ~/iperf3.fork$fork.pid --logfile ~/$FNAME.server > /dev/null 2>&1" > /dev/null 2>&1
-  done
-  for ((fork = 0; fork < $NFORKS; fork++)); do
-    FNAME="currentrun/$1.${NFORKS}t.P$NTHREAD.run$RUN.fork$fork"
-    if [[ "$BIDI" != "" ]] && [[ $((fork%2)) = 1 ]]; then
-          REVERSED="-R"
-    else
-          REVERSED=""
-    fi
-    iperf3 $REVERSED -c ${VM1_IP_IT[$fork]} -B ${VM2_IP_IT[$fork]} -i 1 -t $TIME -P$NTHREAD ${@:3} --logfile ~/$FNAME.client > /dev/null 2>&1 &
-    echo "$!" > ~/iperf3.fork$fork.pid
-  done
-  BPS=0
-  for ((fork = 0; fork < $NFORKS; fork++)); do
-    FNAME="currentrun/$1.${NFORKS}t.P$NTHREAD.run$RUN.fork$fork"
-    if [[ "$BIDI" != "" ]] && [[ $((fork%2)) = 1 ]]; then
-          REVERSED="-R"
-    else
-          REVERSED=""
-    fi
-    wait $(cat ~/iperf3.fork$fork.pid)
-    rm ~/iperf3.fork$fork.pid
-    sed -i -e "1i COMMAND::iperf3 $REVERSED -c ${VM1_IP_IT[$fork]} -B ${VM2_IP_IT[$fork]} -i 1 -t $TIME -P$NTHREAD ${@:3}" ~/$FNAME.client
-    run_ $VM1_MANAGEMENT_IP "kill \$(cat ~/iperf3.fork$fork.pid)" > /dev/null 2>&1
-    BPSG_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Gbits/s" | egrep -o "[0-9\.]+" || echo "0")
-    BPSM_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Mbits/s" | egrep -o "[0-9\.]+" || echo "0")
-    BPSK_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Kbits/s" | egrep -o "[0-9\.]+" || echo "0")
-    BPS=$(echo $BPS $BPSG_ $BPSM_ $BPSK_ | awk '{print $1 + $2 + ($3 / 1000) + ($4 / 1000000)}')
-  done
-  echo "$1.${NFORKS}t.P$NTHREAD.run$RUN : $BPS Gbits/s"
-  done
 }
 
 create_vpp_startup_conf ()
@@ -310,7 +197,7 @@ cpu {
 }
 dpdk {
   uio-driver $DPDK_DRIVER
-  dev default { num-rx-queues $WRK num-rx-desc 1024 }
+  dev default { num-rx-queues 6 num-rx-desc 4096 }
   dev $ROUTER_VM1_IF_PCI
   dev $ROUTER_VM2_IF_PCI
 }
@@ -383,16 +270,6 @@ unconfigure_all ()
   sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM2_IF_PCI
   sudo ip link set $ROUTER_VM1_IF down
   sudo ip link set $ROUTER_VM2_IF down
-}
-
-sync ()
-{
-  rsync -avz              \
-    --exclude=results     \
-    --exclude=.gitignore  \
-    --exclude=.git        \
-    $SCRIPTDIR/ $1:~/
-  ssh $1 -t "echo $1 > .me"
 }
 
 configure_vpp_ipsec_1 ()
@@ -482,15 +359,8 @@ ip route add ${ROUTER_VM2_IP_IT[$i]}/32 via $ROUTER2_VM1_NAME
 
 aws_test_cli ()
 {
-  if [[ "$1" = "dns" ]]; then
-    sync_dns
-  elif [[ "$1" = "sync" ]]; then
-    sync $2.vm1
-    sync $2.vm2
-    sync $2.switch
-    sync $2.switch2
-  elif [[ "$1" = "install" ]]; then
-    install_deps
+  if [[ "$1" = "install" ]]; then
+    install_deps ${@:2}
   elif [[ "$1" = "raw" ]]; then
     unconfigure_all
     configure_raw
@@ -520,20 +390,16 @@ aws_test_cli ()
     configure_vm1 $VM2_MAC
   elif [[ "$1 $2" = "vm2 raw" ]]; then
     configure_vm2 $VM1_MAC
-  elif [[ "$1" = "test" ]]; then
-    test_client ${@:2}
-  elif [[ "$1" = "ptest" ]]; then
-    test_parallel_clients ${@:2}
+
   else
     echo "Usage:"
-    echo "aws.sh sync [HOST]  - sync this script to the host HOST"
-    echo "aws.sh dns          - Add /etc/hosts entries with names vm1/vm2/switch"
-    echo "aws.sh install      - install deps"
-    echo "aws.sh raw          - configure back to back instances"
-    echo "aws.sh pmd          - configure testpmd"
-    echo "aws.sh linux        - configure linux router"
-    echo "aws.sh vpp [uio]    - configure vpp"
-    echo "aws.sh test [NAME]  - run tests"
+    echo "aws.sh install                        - install deps"
+    echo "aws.sh raw                            - configure back to back instances"
+    echo "aws.sh pmd                            - configure testpmd"
+    echo "aws.sh linux                          - configure linux router"
+    echo "aws.sh vpp [uio]                      - configure vpp"
+    echo "aws.sh ptest [NAME] [N] [OPTIONS]     - run N iperf3, store results with name NAME and options OPTIONS"
+    echo "aws.sh clear [NAME]                   - Delete test results NAME"
   fi
 }
 
