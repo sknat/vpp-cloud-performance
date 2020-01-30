@@ -2,12 +2,16 @@
 
 set -e
 
+if [[ "$X" != "" ]]; then
+  set -x
+fi
+
 # ------------------------------
 
 IDENTITY_FILE=~/nskrzypc-key.pem
 
 MTU=${MTU-1500}
-WRK=${WRK-4} # N workers
+WRK=${WRK-1} # N workers
 CP=${CP-""} # compact workers on one thread
 AES=${AES-256} # aes-gcm-128 or aes-gcm-256
 LLQ=${LLQ-""} # 1 ti enable LLQ
@@ -43,6 +47,7 @@ ROUTER_VM2_NAME=FailsafeEthernet2
 # ROUTER interface towards VM1
 ROUTER2_VM1_IF=eth1
 ROUTER2_VM1_IF_PCI=0000:00:06.0
+ROUTER2_VM1_BASE_IP=20.0.4.12
 ROUTER2_VM1_IP=20.0.4.128
 ROUTER2_VM1_IP_PREFIX=20.0.4.128/26
 ROUTER2_VM1_LAST_IP=20.0.4.191
@@ -55,6 +60,7 @@ ROUTER2_VM2_IP=20.0.7.10
 ROUTER2_VM2_NAME=FailsafeEthernet2
 
 VM2_IP=20.0.7.64
+VM2_BASE_IP=20.0.7.11
 VM2_IP_PREFIX=20.0.7.64/26
 VM2_LAST_IP=20.0.7.127
 VM2_IF=eth1
@@ -87,6 +93,7 @@ TESTPMD=$VPP_DIR/build-root/install-vpp-native/external/bin/testpmd
 VPPBIN=$VPP_DIR/build-root/install-vpp-native/vpp/bin/vpp
 VPPCTLBIN=$VPP_DIR/build-root/install-vpp-native/vpp/bin/vppctl
 IGB_UIO_KO=$VPP_DIR/build-root/build-vpp-native/external/dpdk-19.08/x86_64-native-linuxapp-gcc/kmod/igb_uio.ko
+VPP_LIB_DIR=$VPP_DIR/build-root/install-vpp-native/external/lib
 
 # ------------------------------
 
@@ -108,21 +115,21 @@ VM2_IP3_IT=($(ip_it $VM2_IP3 $VM2_LAST_IP3))
 ROUTER_VM2_IP_IT=($(ip_it $ROUTER_VM2_IP $ROUTER_VM2_LAST_IP))
 ROUTER2_VM1_IP_IT=($(ip_it $ROUTER2_VM1_IP $ROUTER2_VM1_LAST_IP))
 
-configure_test_pmd ()
+azure_configure_test_pmd ()
 {
   sudo modprobe -a ib_uverbs
   sudo modprobe mlx4_ib
   sudo sysctl -w vm.nr_hugepages=1024
 
-  sudo $TESTPMD                               \
+  azure_configure_linux_router $1 # Slow path for now
+
+  sudo LD_LIBRARY_PATH=$VPP_LIB_DIR $TESTPMD  \
     -w $ROUTER_VM1_IF_PCI                     \
     -w $ROUTER_VM2_IF_PCI                     \
-    --vdev="net_vdev_netvsc0,iface=eth1,force=1"      \
-    --vdev="net_vdev_netvsc1,iface=eth2,force=1"      \
     -l 0,1,2,3,4,5                            \
     --                                        \
     -i \
-    --eth-peer=4,${AZURE_RT_MAC//[$'\r']}     \
+    --eth-peer=1,${AZURE_RT_MAC//[$'\r']}     \
     --eth-peer=2,${AZURE_RT_MAC//[$'\r']}     \
     -a                                        \
     --forward-mode=mac                        \
@@ -131,7 +138,6 @@ configure_test_pmd ()
     --rxq=$WRK                                \
     --txq=$WRK                                \
     --nb-cores=$WRK
-    # --stats-period 1
 }
 
 configure_vm1 ()
@@ -188,7 +194,7 @@ configure_vm2 ()
     # zero hop route to VM1
     sudo ip route add $VM1_IP_PREFIX dev $VM2_IF3 via $VM1_BASE_IP || true
   elif [[ "$1" = "two" ]]; then
-    echo "Not implem"
+    sudo ip route add $VM1_IP_PREFIX dev $VM2_IF via $ROUTER2_VM2_IP || true
   else
     echo "Wot ?"
   fi
@@ -196,17 +202,32 @@ configure_vm2 ()
   sudo ip link set $VM2_IF mtu $MTU
 }
 
-configure_linux_router ()
+azure_configure_linux_router ()
 {
   # OK
   sudo ip addr flush dev $ROUTER_VM1_IF
   sudo ip addr flush dev $ROUTER_VM2_IF
 
-  sudo ip addr add $ROUTER_VM1_IP/24 dev $ROUTER_VM1_IF
-  sudo ip addr add $ROUTER_VM2_BASE_IP/24 dev $ROUTER_VM2_IF
+  if [[ "$1" = "1" ]] ; then
+    sudo ip addr add $ROUTER_VM1_IP/24 dev $ROUTER_VM1_IF
+    sudo ip addr add $ROUTER_VM2_BASE_IP/24 dev $ROUTER_VM2_IF
 
-  sudo ip route add $VM1_IP_PREFIX dev $ROUTER_VM1_IF via $VM1_BASE_IP || true
-  sudo ip route add $VM2_IP2_PREFIX dev $ROUTER_VM2_IF via $VM2_BASE_IP2 || true
+    sudo ip route add $VM1_IP_PREFIX dev $ROUTER_VM1_IF via $VM1_BASE_IP || true
+    sudo ip route add $VM2_IP_PREFIX dev $ROUTER_VM2_IF via $ROUTER2_VM1_BASE_IP || true
+  elif [[ "$1" = "2" ]] ; then
+    sudo ip addr add $ROUTER2_VM1_BASE_IP/24 dev $ROUTER_VM1_IF
+    sudo ip addr add $ROUTER2_VM2_IP/24 dev $ROUTER_VM2_IF
+
+    sudo ip route add $VM1_IP_PREFIX dev $ROUTER_VM1_IF via $ROUTER_VM2_BASE_IP || true
+    sudo ip route add $VM2_IP_PREFIX dev $ROUTER_VM2_IF via $VM2_BASE_IP || true
+  else
+    # One hop
+    sudo ip addr add $ROUTER_VM1_IP/24 dev $ROUTER_VM1_IF
+    sudo ip addr add $ROUTER_VM2_BASE_IP/24 dev $ROUTER_VM2_IF
+
+    sudo ip route add $VM1_IP_PREFIX dev $ROUTER_VM1_IF via $VM1_BASE_IP || true
+    sudo ip route add $VM2_IP2_PREFIX dev $ROUTER_VM2_IF via $VM2_BASE_IP2 || true
+  fi
 
   sudo sysctl net.ipv4.ip_forward=1
 
@@ -230,20 +251,10 @@ install_deps ()
       libmnl-dev librdmacm-dev librdmacm1 build-essential libnuma-dev # dpdk
     git clone https://gerrit.fd.io/r/vpp || true
     cd vpp
-    git fetch "https://gerrit.fd.io/r/vpp" refs/changes/89/24289/1 && git checkout FETCH_HEAD
+    # git fetch "https://gerrit.fd.io/r/vpp" refs/changes/89/24289/1 && git checkout FETCH_HEAD
     git apply ~/test/patch/mlx4_pmd.patch
     make install-dep
     make build-release
-    cd ~/
-    wget https://fast.dpdk.org/rel/dpdk-18.02.2.tar.xz
-    tar -xvf dpdk-18.02.2.tar.xz
-    cd dpdk-stable-18.02.2/config
-    patch -R common_base ~/test/patch/dpdk-18.02.patch
-    cd ..
-    make config T=x86_64-native-linuxapp-gcc
-    sed -ri 's,(MLX._PMD=)n,\1y,' build/.config
-    make
-    make install T=x86_64-native-linuxapp-gcc DESTDIR=~/dpdk EXTRA_CFLAGS='-fPIC -pie'
   fi
 }
 
@@ -268,10 +279,8 @@ cpu {
 }
 dpdk {
   dev default { num-rx-queues $WRK num-rx-desc 1024 }
-  dev $ROUTER_VM1_IF_PCI
-  dev $ROUTER_VM2_IF_PCI
-  vdev net_vdev_netvsc0,iface=eth1
-  vdev net_vdev_netvsc1,iface=eth2
+  dev $ROUTER_VM1_IF_PCI { name VM1_IF }
+  dev $ROUTER_VM2_IF_PCI { name VM2_IF }
 }
 " | sudo tee $VPP_RUN_DIR/vpp.conf > /dev/null
 }
@@ -282,30 +291,53 @@ configure_vpp ()
   sudo modprobe -a ib_uverbs
   sudo modprobe mlx4_ib
   sudo sysctl -w vm.nr_hugepages=1024
+
+  azure_configure_linux_router $1 # Slow path for now
+
   create_vpp_startup_conf
-# set int ip address $ROUTER_VM1_NAME $ROUTER_VM1_IP/24
-# set int ip address $ROUTER_VM2_NAME $ROUTER_VM2_BASE_IP/24
-# ip route add $VM1_IP_PREFIX via $VM1_BASE_IP/32 $ROUTER_VM1_NAME
-# ip route add $VM2_IP2_PREFIX via $VM2_BASE_IP2/32 $ROUTER_VM2_NAME
 
-  # ----------------- Startup CLIs -----------------
   echo "
-set int state $ROUTER_VM1_NAME up
-set int state $ROUTER_VM2_NAME up
+    set int st VM1_IF up
+    set int st VM2_IF up
 
-set int ip address $ROUTER_VM1_NAME $ROUTER_VM1_IP/32
-ip route add $ROUTER2_VM1_IP/32 via $ROUTER_VM2_NAME
+    set int mtu $MTU VM1_IF
+    set int mtu $MTU VM2_IF
+  " | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
 
-set int mtu $MTU $ROUTER_VM1_NAME
-set int mtu $MTU $ROUTER_VM2_NAME
-" | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
+  if [[ "$1" = "1" ]] ; then
+    echo "
+      set int ip addr VM1_IF $ROUTER_VM1_IP/24
+      set int ip addr VM2_IF $ROUTER_VM2_BASE_IP/24
 
-#   for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
-#     echo "
-# set ip neighbor $ROUTER_VM1_NAME ${VM1_IP_IT[$i]} ${VM1_MAC//[$'\r']}
-# set ip neighbor $ROUTER_VM2_NAME ${VM2_IP_IT[$i]} ${VM2_MAC//[$'\r']}
-# " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
-#   done
+      set ip neighbor VM1_IF $VM1_BASE_IP ${AZURE_RT_MAC//[$'\r']}
+      set ip neighbor VM2_IF $ROUTER2_VM1_BASE_IP ${AZURE_RT_MAC//[$'\r']}
+
+      ip route add $VM1_IP_PREFIX via $VM1_BASE_IP VM1_IF
+      ip route add $VM2_IP_PREFIX via $ROUTER2_VM1_BASE_IP VM2_IF
+    " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
+  elif [[ "$1" = "2" ]] ; then
+    echo "
+      set int ip addr VM1_IF $ROUTER2_VM1_BASE_IP/24
+      set int ip addr VM2_IF $ROUTER2_VM2_IP/24
+
+      set ip neighbor VM1_IF $ROUTER_VM2_BASE_IP ${AZURE_RT_MAC//[$'\r']}
+      set ip neighbor VM2_IF $VM2_BASE_IP ${AZURE_RT_MAC//[$'\r']}
+
+      ip route add $VM1_IP_PREFIX via $ROUTER_VM2_BASE_IP VM1_IF
+      ip route add $VM2_IP_PREFIX via $VM2_BASE_IP VM2_IF
+    " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
+  else
+    echo "
+      set int ip addr VM1_IF $ROUTER_VM1_IP/24
+      set int ip addr VM2_IF $ROUTER_VM2_BASE_IP/24
+    " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
+    for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+      echo "
+	set ip neighbor VM1_IF ${VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+	set ip neighbor VM2_IF ${VM2_IP2_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+      " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
+    done
+  fi
 
   run_vpp
 }
@@ -314,7 +346,9 @@ run_vpp ()
 {
   sudo ln -s $VPPCTLBIN /usr/local/bin/vppctl || true
   echo "LLQ is $LLQ"
-  sudo DPDK_ENA_LLQ_ENABLE=$LLQ $VPPBIN -c $VPP_RUN_DIR/vpp.conf
+  sudo DPDK_ENA_LLQ_ENABLE=$LLQ \
+    LD_LIBRARY_PATH=$VPP_LIB_DIR \
+    $VPPBIN -c $VPP_RUN_DIR/vpp.conf
   if [[ "$CP" != "" ]]; then
     echo "compacting vpp workers"
     sleep 1
@@ -422,9 +456,9 @@ aws_test_cli ()
   if [[ "$1" = "install" ]]; then
     install_deps ${@:2}
   elif [[ "$1" = "pmd" ]]; then
-    configure_test_pmd
+    azure_configure_test_pmd ${@:2}
   elif [[ "$1" = "linux" ]]; then
-    configure_linux_router
+    azure_configure_linux_router ${@:2}
   elif [[ "$1" = "vpp" ]]; then
     configure_vpp ${@:2}
   elif [[ "$1" = "ipsec1" ]]; then

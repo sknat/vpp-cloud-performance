@@ -86,4 +86,4 @@ generate_if_json switch2.if1 20.0.5 1
 generate_if_json switch2.if2 20.0.6 1
 # aws ec2 create-network-interface --cli-input-json file://interface.switch2.if2.json
 generate_if_json vm2.if1 20.0.7 1
-aws ec2 create-network-interface --cli-input-json file://interface.vm2.if1.json
+# aws ec2 create-network-interface --cli-input-json file://interface.vm2.if1.json
