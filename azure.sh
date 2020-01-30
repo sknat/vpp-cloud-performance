@@ -401,18 +401,16 @@ echo "
     for ((i = 0; i < 4; i++)); do
       echo "
 	create ipip tunnel src ${ROUTER_VM2_IP_IT[$i]} dst ${ROUTER2_VM1_IP_IT[$i]}
-        udp encap add ${ROUTER_VM2_IP_IT[$i]} ${ROUTER2_VM1_IP_IT[$i]} $((i+4000)) $((i+5000))
 
-        ip route add ${ROUTER2_VM1_IP_IT[$i]}/32 via udp-encap $i
-
-	ipsec sa add 2$i spi 20$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG udp-encap
-	ipsec sa add 3$i spi 30$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG udp-encap
+	ipsec sa add 2$i spi 20$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG udp-encap tunnel-src ${ROUTER2_VM1_IP_IT[$i]} tunnel-dst ${ROUTER_VM2_IP_IT[$i]}
+	ipsec sa add 3$i spi 30$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG udp-encap tunnel-src ${ROUTER_VM2_IP_IT[$i]} tunnel-dst ${ROUTER2_VM1_IP_IT[$i]}
 	ipsec tunnel protect ipip$i sa-in 2$i sa-out 3$i
 
 	set int state ipip$i up
 	set int ip addr ipip$i 127.0.0.$((i+1))/32
 
 	ip route add ${VM2_IP_IT[$i]}/32 via ipip$i
+	set int ip addr VM2_IF ${ROUTER_VM2_IP_IT[$i]}/24
 
 	set ip neighbor VM1_IF ${VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
 	set ip neighbor VM2_IF ${ROUTER2_VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
@@ -432,18 +430,16 @@ echo "
     for ((i = 0; i < 4; i++)); do
       echo "
 	create ipip tunnel src ${ROUTER2_VM1_IP_IT[$i]} dst ${ROUTER_VM2_IP_IT[$i]}
-        udp encap add ${ROUTER2_VM1_IP_IT[$i]} ${ROUTER_VM2_IP_IT[$i]} $((i+5000)) $((i+4000))
 
-        ip route add ${ROUTER_VM2_IP_IT[$i]}/32 via udp-encap $i
-
-	ipsec sa add 2$i spi 20$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG udp-encap
-	ipsec sa add 3$i spi 30$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG udp-encap
+	ipsec sa add 2$i spi 20$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG udp-encap tunnel-src ${ROUTER2_VM1_IP_IT[$i]} tunnel-dst ${ROUTER_VM2_IP_IT[$i]}
+	ipsec sa add 3$i spi 30$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG udp-encap tunnel-src ${ROUTER_VM2_IP_IT[$i]} tunnel-dst ${ROUTER2_VM1_IP_IT[$i]}
 	ipsec tunnel protect ipip$i sa-in 3$i sa-out 2$i
 
 	set int state ipip$i up
 	set int ip addr ipip$i 127.0.0.$((i+1))/32
 
 	ip route add ${VM1_IP_IT[$i]}/32 via ipip$i
+	set int ip addr VM1_IF ${ROUTER2_VM1_IP_IT[$i]}/24
 
 	set ip neighbor VM2_IF ${VM2_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
 	set ip neighbor VM1_IF ${ROUTER_VM2_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
