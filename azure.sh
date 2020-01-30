@@ -268,9 +268,15 @@ create_vpp_startup_conf ()
   fi
   sudo mkdir -p $VPP_RUN_DIR
 
+  if [[ "$DBG" != "" ]]; then
+    MODE="interactive"
+  else
+    MODE=""
+  fi
+
   echo "
 unix {
-  interactive
+  $MODE
   log $VPP_RUN_DIR/vpp.log
   cli-listen $VPP_RUN_DIR/cli.sock
   exec $VPP_RUN_DIR/startup.conf
