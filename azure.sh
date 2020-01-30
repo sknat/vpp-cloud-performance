@@ -91,6 +91,7 @@ VPP_RUN_DIR=/run/vpp
 DPDK_DEVBIND=$VPP_DIR/build-root/install-vpp-native/external/sbin/dpdk-devbind
 TESTPMD=$VPP_DIR/build-root/install-vpp-native/external/bin/testpmd
 VPPBIN=$VPP_DIR/build-root/install-vpp-native/vpp/bin/vpp
+VPPDBGBIN=$VPP_DIR/build-root/install-vpp_debug-native/vpp/bin/vpp
 VPPCTLBIN=$VPP_DIR/build-root/install-vpp-native/vpp/bin/vppctl
 IGB_UIO_KO=$VPP_DIR/build-root/build-vpp-native/external/dpdk-19.08/x86_64-native-linuxapp-gcc/kmod/igb_uio.ko
 VPP_LIB_DIR=$VPP_DIR/build-root/install-vpp-native/external/lib
@@ -140,7 +141,7 @@ azure_configure_test_pmd ()
     --nb-cores=$WRK
 }
 
-configure_vm1 ()
+azure_configure_vm1 ()
 {
   # OK
   sudo ip link set $VM1_IF down
@@ -158,7 +159,7 @@ configure_vm1 ()
   sudo ip link set $VM1_IF mtu $MTU
 }
 
-configure_vm2 ()
+azure_configure_vm2 ()
 {
   if [[ "$1" = "" ]]; then
      echo "please provide zero|one|two"
@@ -269,6 +270,7 @@ create_vpp_startup_conf ()
 
   echo "
 unix {
+  interactive
   log $VPP_RUN_DIR/vpp.log
   cli-listen $VPP_RUN_DIR/cli.sock
   exec $VPP_RUN_DIR/startup.conf
@@ -285,7 +287,7 @@ dpdk {
 " | sudo tee $VPP_RUN_DIR/vpp.conf > /dev/null
 }
 
-configure_vpp ()
+azure_configure_vpp ()
 {
   sudo pkill vpp || true
   sudo modprobe -a ib_uverbs
@@ -344,11 +346,16 @@ configure_vpp ()
 
 run_vpp ()
 {
+  if [[ "$DBG" != "" ]]; then
+    BIN="gdb --args $VPPDBGBIN"
+  else
+    BIN=$VPPBIN
+  fi
+
   sudo ln -s $VPPCTLBIN /usr/local/bin/vppctl || true
-  echo "LLQ is $LLQ"
   sudo DPDK_ENA_LLQ_ENABLE=$LLQ \
     LD_LIBRARY_PATH=$VPP_LIB_DIR \
-    $VPPBIN -c $VPP_RUN_DIR/vpp.conf
+    $BIN -c $VPP_RUN_DIR/vpp.conf
   if [[ "$CP" != "" ]]; then
     echo "compacting vpp workers"
     sleep 1
@@ -357,96 +364,90 @@ run_vpp ()
   fi
 }
 
-unconfigure_all ()
+azure_configure_ipsec ()
 {
   sudo pkill vpp || true
-  sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM1_IF_PCI
-  sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM2_IF_PCI
-  sudo ip link set $ROUTER_VM1_IF down
-  sudo ip link set $ROUTER_VM2_IF down
-}
+  sudo modprobe -a ib_uverbs
+  sudo modprobe mlx4_ib
+  sudo sysctl -w vm.nr_hugepages=1024
 
-configure_vpp_ipsec_1 ()
-{
-  sudo pkill vpp || true
-  sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM1_IF_PCI
-  sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM2_IF_PCI
-  sudo ip link set $ROUTER_VM1_IF down
-  sudo ip link set $ROUTER_VM2_IF down
+  azure_configure_linux_router $1 # Slow path for now
 
-  configure_vpp_nic_drivers $1
   create_vpp_startup_conf
 
-  # ----------------- Startup CLIs -----------------
-  echo "
-set int state $ROUTER_VM1_NAME up
-set int state $ROUTER_VM2_NAME up
-set int ip address $ROUTER_VM1_NAME $ROUTER_VM1_IP/32
+echo "
+    set int st VM1_IF up
+    set int st VM2_IF up
 
-ip route add $ROUTER2_VM1_IP/32 via $ROUTER_VM2_NAME
-" | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
+    set int mtu $MTU VM1_IF
+    set int mtu $MTU VM2_IF
+  " | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
 
-  for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+  if [[ "$1" = "1" ]] ; then
     echo "
-set int ip address $ROUTER_VM2_NAME ${ROUTER_VM2_IP_IT[$i]}/32
-create ipip tunnel src ${ROUTER_VM2_IP_IT[$i]} dst ${ROUTER2_VM1_IP_IT[$i]}
+      set int ip addr VM1_IF $ROUTER_VM1_IP/24
+      set int ip addr VM2_IF $ROUTER_VM2_BASE_IP/24
 
-ipsec sa add 2$i spi 20$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG
-ipsec sa add 3$i spi 30$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG
-ipsec tunnel protect ipip$i sa-in 2$i sa-out 3$i
+      ip route add $VM1_IP_PREFIX via $VM1_BASE_IP VM1_IF
+    " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
 
-set int state ipip$i up
-set int ip addr ipip$i 127.0.0.$((i+1))/32
-set ip neighbor $ROUTER_VM2_NAME ${ROUTER2_VM1_IP_IT[$i]} ${ROUTER2_VM1_MAC//[$'\r']}
-set ip neighbor $ROUTER_VM1_NAME ${VM1_IP_IT[$i]} ${VM1_MAC//[$'\r']}
+    # for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+    for ((i = 0; i < 4; i++)); do
+      echo "
+	create ipip tunnel src ${ROUTER_VM2_IP_IT[$i]} dst ${ROUTER2_VM1_IP_IT[$i]}
+        udp encap add ${ROUTER_VM2_IP_IT[$i]} ${ROUTER2_VM1_IP_IT[$i]} $((i+4000)) $((i+5000))
 
-ip route add ${VM1_IP_IT[$i]}/32 via $ROUTER_VM1_NAME
-ip route add ${VM2_IP_IT[$i]}/32 via ipip$i
-ip route add ${ROUTER2_VM1_IP_IT[$i]}/32 via $ROUTER_VM2_NAME
-" | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
-  done
+        ip route add ${ROUTER2_VM1_IP_IT[$i]}/32 via udp-encap $i
 
-  run_vpp
-}
+	ipsec sa add 2$i spi 20$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG udp-encap
+	ipsec sa add 3$i spi 30$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG udp-encap
+	ipsec tunnel protect ipip$i sa-in 2$i sa-out 3$i
 
-configure_vpp_ipsec_2 ()
-{
-  sudo pkill vpp || true
-  sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM1_IF_PCI
-  sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM2_IF_PCI
-  sudo ip link set $ROUTER_VM1_IF down
-  sudo ip link set $ROUTER_VM2_IF down
+	set int state ipip$i up
+	set int ip addr ipip$i 127.0.0.$((i+1))/32
 
-  configure_vpp_nic_drivers $1
-  create_vpp_startup_conf
+	ip route add ${VM2_IP_IT[$i]}/32 via ipip$i
 
-  # ----------------- Startup CLIs -----------------
-  echo "
-set int state $ROUTER2_VM1_NAME up
-set int state $ROUTER2_VM2_NAME up
-set int ip address $ROUTER2_VM2_NAME $ROUTER2_VM2_IP/32
+	set ip neighbor VM1_IF ${VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+	set ip neighbor VM2_IF ${ROUTER2_VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+      " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
+    done
 
-" | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
 
-  for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+  elif [[ "$1" = "2" ]] ; then
     echo "
-set int ip address $ROUTER2_VM1_NAME ${ROUTER2_VM1_IP_IT[$i]}/32
-create ipip tunnel src ${ROUTER2_VM1_IP_IT[$i]} dst ${ROUTER_VM2_IP_IT[$i]}
+      set int ip addr VM1_IF $ROUTER2_VM1_BASE_IP/24
+      set int ip addr VM2_IF $ROUTER2_VM2_IP/24
 
-ipsec sa add 2$i spi 20$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG
-ipsec sa add 3$i spi 30$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG
-ipsec tunnel protect ipip$i sa-in 3$i sa-out 2$i
+      ip route add $VM2_IP_PREFIX via $VM2_BASE_IP VM2_IF
+    " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
 
-set int state ipip$i up
-set int ip addr ipip$i 127.0.0.$((i+1))/32
-set ip neighbor $ROUTER2_VM1_NAME ${ROUTER_VM2_IP_IT[$i]} ${ROUTER_VM2_MAC//[$'\r']}
-set ip neighbor $ROUTER2_VM2_NAME ${VM2_IP_IT[$i]} ${VM2_MAC//[$'\r']}
+    # for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+    for ((i = 0; i < 4; i++)); do
+      echo "
+	create ipip tunnel src ${ROUTER2_VM1_IP_IT[$i]} dst ${ROUTER_VM2_IP_IT[$i]}
+        udp encap add ${ROUTER2_VM1_IP_IT[$i]} ${ROUTER_VM2_IP_IT[$i]} $((i+5000)) $((i+4000))
 
-ip route add ${VM2_IP_IT[$i]}/32 via $ROUTER2_VM2_NAME
-ip route add ${VM1_IP_IT[$i]}/32 via ipip$i
-ip route add ${ROUTER_VM2_IP_IT[$i]}/32 via $ROUTER2_VM1_NAME
-" | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
-  done
+        ip route add ${ROUTER_VM2_IP_IT[$i]}/32 via udp-encap $i
+
+	ipsec sa add 2$i spi 20$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG udp-encap
+	ipsec sa add 3$i spi 30$i crypto-key $CRYPTO_KEY crypto-alg $CRYPTO_ALG udp-encap
+	ipsec tunnel protect ipip$i sa-in 3$i sa-out 2$i
+
+	set int state ipip$i up
+	set int ip addr ipip$i 127.0.0.$((i+1))/32
+
+	ip route add ${VM1_IP_IT[$i]}/32 via ipip$i
+
+	set ip neighbor VM2_IF ${VM2_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+	set ip neighbor VM1_IF ${ROUTER_VM2_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+      " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
+    done
+
+  else
+    echo "Missing machine #ID"
+    exit 1
+  fi
 
   run_vpp
 }
@@ -460,16 +461,14 @@ aws_test_cli ()
   elif [[ "$1" = "linux" ]]; then
     azure_configure_linux_router ${@:2}
   elif [[ "$1" = "vpp" ]]; then
-    configure_vpp ${@:2}
-  elif [[ "$1" = "ipsec1" ]]; then
-    configure_vpp_ipsec_1 ${@:2}
-  elif [[ "$1" = "ipsec2" ]]; then
-    configure_vpp_ipsec_2 ${@:2}
+    azure_configure_vpp ${@:2}
+  elif [[ "$1" = "ipsec" ]]; then
+    azure_configure_ipsec ${@:2}
   # VM configuration
   elif [[ "$1" = "vm1" ]]; then
-    configure_vm1
+    azure_configure_vm1
   elif [[ "$1" = "vm2" ]]; then
-    configure_vm2 $2
+    azure_configure_vm2 $2
   else
     echo "Usage:"
     echo "aws.sh sync                                              - sync this script"
