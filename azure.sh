@@ -22,18 +22,12 @@ VM1_IP_PREFIX=20.0.2.64/26
 VM1_LAST_IP=20.0.2.127
 VM1_IF=eth1
 
-VM1_MANAGEMENT_IP=20.0.1.4
-ROUTER_MANAGEMENT_IP=20.0.1.6
-ROUTER2_MANAGEMENT_IP=20.0.1.7
-VM2_MANAGEMENT_IP=20.0.1.5
-
 AZURE_RT_MAC=12:34:56:78:9a:bc
 
 # ROUTER interface towards VM1
 ROUTER_VM1_IF=eth1
 ROUTER_VM1_IF_PCI=0002:00:02.0 # rename6
 ROUTER_VM1_IP=20.0.2.10
-ROUTER_VM1_NAME=FailsafeEthernet0
 
 # ROUTER interface towards VM2
 ROUTER_VM2_IF=eth2
@@ -42,7 +36,6 @@ ROUTER_VM2_BASE_IP=20.0.4.10
 ROUTER_VM2_IP=20.0.4.64
 ROUTER_VM2_IP_PREFIX=20.0.4.64/26
 ROUTER_VM2_LAST_IP=20.0.4.127
-ROUTER_VM2_NAME=FailsafeEthernet2
 
 # ROUTER interface towards VM1
 ROUTER2_VM1_IF=eth1
@@ -51,20 +44,17 @@ ROUTER2_VM1_BASE_IP=20.0.4.12
 ROUTER2_VM1_IP=20.0.4.128
 ROUTER2_VM1_IP_PREFIX=20.0.4.128/26
 ROUTER2_VM1_LAST_IP=20.0.4.191
-ROUTER2_VM1_NAME=FailsafeEthernet0
 
 # ROUTER interface towards VM2
 ROUTER2_VM2_IF=eth2
 ROUTER2_VM2_IF_PCI=0000:00:07.0
 ROUTER2_VM2_IP=20.0.7.10
-ROUTER2_VM2_NAME=FailsafeEthernet2
 
 VM2_IP=20.0.7.64
 VM2_BASE_IP=20.0.7.11
 VM2_IP_PREFIX=20.0.7.64/26
 VM2_LAST_IP=20.0.7.127
 VM2_IF=eth1
-
 
 VM2_BASE_IP2=20.0.4.13
 VM2_IP2=20.0.4.192
@@ -127,11 +117,13 @@ azure_configure_test_pmd ()
   sudo LD_LIBRARY_PATH=$VPP_LIB_DIR $TESTPMD  \
     -w $ROUTER_VM1_IF_PCI                     \
     -w $ROUTER_VM2_IF_PCI                     \
+    --vdev="net_vdev_netvsc0,iface=eth1"      \
+    --vdev="net_vdev_netvsc1,iface=eth2"      \
     -l 0,1,2,3,4,5                            \
     --                                        \
     -i \
-    --eth-peer=1,${AZURE_RT_MAC//[$'\r']}     \
     --eth-peer=2,${AZURE_RT_MAC//[$'\r']}     \
+    --eth-peer=4,${AZURE_RT_MAC//[$'\r']}     \
     -a                                        \
     --forward-mode=mac                        \
     --burst=32                                \
@@ -256,6 +248,7 @@ install_deps ()
     git apply ~/test/patch/mlx4_pmd.patch
     make install-dep
     make build-release
+    sudo cp ~/test/patch/10-dtap.link /etc/systemd/network/10-dtap.link
   fi
 }
 
@@ -287,8 +280,16 @@ cpu {
 }
 dpdk {
   dev default { num-rx-queues $WRK num-rx-desc 1024 }
+  vdev net_vdev_netvsc0,iface=eth0,ignore=1
+  vdev net_vdev_netvsc1,iface=eth1
+  vdev net_vdev_netvsc2,iface=eth2
   dev $ROUTER_VM1_IF_PCI { name VM1_IF }
   dev $ROUTER_VM2_IF_PCI { name VM2_IF }
+  log-level eal:8
+}
+buffers {
+   buffers-per-numa 131072
+   default data-size 4096
 }
 " | sudo tee $VPP_RUN_DIR/vpp.conf > /dev/null
 }
@@ -308,8 +309,6 @@ azure_configure_vpp ()
     set int st VM1_IF up
     set int st VM2_IF up
 
-    set int mtu $MTU VM1_IF
-    set int mtu $MTU VM2_IF
   " | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
 
   if [[ "$1" = "1" ]] ; then
@@ -375,7 +374,7 @@ azure_configure_ipsec ()
   sudo pkill vpp || true
   sudo modprobe -a ib_uverbs
   sudo modprobe mlx4_ib
-  sudo sysctl -w vm.nr_hugepages=1024
+  sudo sysctl -w vm.nr_hugepages=2048
 
   azure_configure_linux_router $1 # Slow path for now
 
@@ -387,6 +386,7 @@ echo "
 
     set int mtu $MTU VM1_IF
     set int mtu $MTU VM2_IF
+
   " | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
 
   if [[ "$1" = "1" ]] ; then
@@ -397,8 +397,7 @@ echo "
       ip route add $VM1_IP_PREFIX via $VM1_BASE_IP VM1_IF
     " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
 
-    # for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
-    for ((i = 0; i < 4; i++)); do
+    for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
       echo "
 	create ipip tunnel src ${ROUTER_VM2_IP_IT[$i]} dst ${ROUTER2_VM1_IP_IT[$i]}
 
@@ -426,8 +425,7 @@ echo "
       ip route add $VM2_IP_PREFIX via $VM2_BASE_IP VM2_IF
     " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
 
-    # for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
-    for ((i = 0; i < 4; i++)); do
+    for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
       echo "
 	create ipip tunnel src ${ROUTER2_VM1_IP_IT[$i]} dst ${ROUTER_VM2_IP_IT[$i]}
 
