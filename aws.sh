@@ -16,12 +16,12 @@ VM1_IP_PREFIX=20.0.2/24
 VM1_LAST_IP=20.0.2.100
 VM1_IF=ens6
 
-VM1_MAC=02:a6:3b:7c:8e:7c
-ROUTER_VM1_MAC=02:f6:51:84:6a:a2
-ROUTER_VM2_MAC=02:c2:c6:31:b4:16
-ROUTER2_VM1_MAC=02:1c:0d:2a:ab:1a
-ROUTER2_VM2_MAC=02:59:9f:b7:3e:06
-VM2_MAC=02:56:5b:e5:38:22
+VM1_MAC=02:bd:5b:aa:df:a5
+ROUTER_VM1_MAC=02:45:d3:96:a4:9b
+ROUTER_VM2_MAC=02:45:d3:96:a4:9b
+ROUTER2_VM1_MAC=
+ROUTER2_VM2_MAC=
+VM2_MAC=02:bc:f7:69:06:95
 
 # ROUTER interface towards VM1
 ROUTER_VM1_IF=ens6
@@ -30,11 +30,11 @@ ROUTER_VM1_IP=20.0.3.1
 ROUTER_VM1_NAME=VirtualFunctionEthernet0/6/0
 
 # ROUTER interface towards VM2
-ROUTER_VM2_IF=ens7
+ROUTER_VM2_IF=ens6
 ROUTER_VM2_IF_PCI=0000:00:07.0
 ROUTER_VM2_IP=20.0.4.1
 ROUTER_VM2_LAST_IP=20.0.4.100
-ROUTER_VM2_NAME=VirtualFunctionEthernet0/7/0
+ROUTER_VM2_NAME=VirtualFunctionEthernet0/6/0
 
 # ROUTER interface towards VM1
 ROUTER2_VM1_IF=ens6
@@ -47,7 +47,7 @@ ROUTER2_VM1_NAME=VirtualFunctionEthernet0/6/0
 ROUTER2_VM2_IF=ens7
 ROUTER2_VM2_IF_PCI=0000:00:07.0
 ROUTER2_VM2_IP=20.0.6.1
-ROUTER2_VM2_NAME=VirtualFunctionEthernet0/7/0
+ROUTER2_VM2_NAME=VirtualFunctionEthernet0/6/0
 
 VM2_IP=20.0.7.1
 VM2_IP_PREFIX=20.0.7/24
@@ -113,14 +113,15 @@ configure_test_pmd ()
 
 configure_vm1 ()
 {
+  NXT_HOP=$1
   sudo ip link set $VM1_IF down
   sudo ip link set $VM1_IF up
   sudo ip addr flush dev $VM1_IF
   for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
-    sudo ip addr add ${VM1_IP_IT[$i]}/32 dev $VM1_IF || true
+    sudo ip addr add ${VM1_IP_IT[$i]}/24 dev $VM1_IF || true
   done
   for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
-    sudo arp -i $VM1_IF -s ${VM2_IP_IT[$i]} ${1//[$'\r']}
+    sudo arp -i $VM1_IF -s ${VM2_IP_IT[$i]} ${NXT_HOP//[$'\r']}
   done
   sudo ip link set $VM1_IF mtu $MTU
   sudo ip route add 20.0.7.0/24 dev $VM1_IF
@@ -128,14 +129,15 @@ configure_vm1 ()
 
 configure_vm2 ()
 {
+  NXT_HOP=$1
   sudo ip link set $VM2_IF down
   sudo ip link set $VM2_IF up
   sudo ip addr flush dev $VM2_IF
   for ((i = 0; i < ${#VM1_IP_IT[@]}; i++)); do
-    sudo ip addr add ${VM2_IP_IT[$i]}/32 dev $VM2_IF || true
+    sudo ip addr add ${VM2_IP_IT[$i]}/24 dev $VM2_IF || true
   done
   for ((i = 0; i < ${#VM1_IP_IT[@]}; i++)); do
-    sudo arp -i $VM2_IF -s ${VM1_IP_IT[$i]} ${1//[$'\r']}
+    sudo arp -i $VM2_IF -s ${VM1_IP_IT[$i]} ${NXT_HOP//[$'\r']}
   done
   sudo ip link set $VM2_IF mtu $MTU
   sudo ip route add 20.0.2.0/24 dev $VM2_IF
@@ -361,9 +363,6 @@ aws_test_cli ()
 {
   if [[ "$1" = "install" ]]; then
     install_deps ${@:2}
-  elif [[ "$1" = "raw" ]]; then
-    unconfigure_all
-    configure_raw
   elif [[ "$1" = "pmd" ]]; then
     unconfigure_all
     configure_test_pmd
@@ -373,33 +372,32 @@ aws_test_cli ()
   elif [[ "$1" = "vpp" ]]; then
     unconfigure_all
     configure_vpp ${@:2}
-  elif [[ "$1" = "ipsec1" ]]; then
-    configure_vpp_ipsec_1 ${@:2}
-  elif [[ "$1" = "ipsec2" ]]; then
-    configure_vpp_ipsec_2 ${@:2}
+  elif [[ "$1 $2" = "ipsec 1" ]]; then
+    configure_vpp_ipsec_1 ${@:3}
+  elif [[ "$1 $2" = "ipsec 2" ]]; then
+    configure_vpp_ipsec_2 ${@:3}
   # VM configuration
-  elif [[ "$1 $2" = "vm1 router" ]]; then
+  elif [[ "$1 $2" = "vm1 one" ]]; then
     configure_vm1 $ROUTER_VM1_MAC
-  elif [[ "$1 $2" = "vm2 router" ]]; then
+  elif [[ "$1 $2" = "vm2 one" ]]; then
     configure_vm2 $ROUTER_VM2_MAC
-  elif [[ "$1 $2" = "vm1 ipsec" ]]; then
+  elif [[ "$1 $2" = "vm1 two" ]]; then
     configure_vm1 $ROUTER_VM1_MAC
-  elif [[ "$1 $2" = "vm2 ipsec" ]]; then
+  elif [[ "$1 $2" = "vm2 two" ]]; then
     configure_vm2 $ROUTER2_VM2_MAC
-  elif [[ "$1 $2" = "vm1 raw" ]]; then
+  elif [[ "$1 $2" = "vm1 zero" ]]; then
     configure_vm1 $VM2_MAC
-  elif [[ "$1 $2" = "vm2 raw" ]]; then
+  elif [[ "$1 $2" = "vm2 zero" ]]; then
     configure_vm2 $VM1_MAC
 
   else
     echo "Usage:"
     echo "aws.sh install                        - install deps"
-    echo "aws.sh raw                            - configure back to back instances"
-    echo "aws.sh pmd                            - configure testpmd"
-    echo "aws.sh linux                          - configure linux router"
-    echo "aws.sh vpp [uio]                      - configure vpp"
-    echo "aws.sh ptest [NAME] [N] [OPTIONS]     - run N iperf3, store results with name NAME and options OPTIONS"
-    echo "aws.sh clear [NAME]                   - Delete test results NAME"
+    echo "aws.sh vm[1|2] [zero|one|two]         - configure VMs with zero/one/two hops"
+    echo "aws.sh pmd                            - configure testpmd forwarding (one hop)"
+    echo "aws.sh linux                          - configure linux router (one hop)"
+    echo "aws.sh vpp [uio]                      - configure vpp (one hop)"
+    echo "aws.sh ipsec [1|2]                    - configure ipsec (two hops)"
   fi
 }
 

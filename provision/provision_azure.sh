@@ -2,14 +2,20 @@
 
 set -e
 
-VMSIZE=Standard_F8s_v2
-BASTIONSIZE=Standard_B1ls
-LOCATION=eastus
-RESOURCE_GROUP=resources
-NETWORK=network
-NET_SECURITY_GROUP=net-security-group
+# Available configuration :
+VMSIZE=
+BASTIONSIZE=
+LOCATION=
+RESOURCE_GROUP=
+NETWORK=
+NET_SECURITY_GROUP=
 SUBSCRIPTION=
-SSH_KEYFILE=key.pem.pub
+SSH_KEYFILE=
+
+SCRIPTDIR=$(dirname ${BASH_SOURCE[0]})
+if [[ -f $SCRIPTDIR/provision_azure-conf.sh ]]; then
+  source $SCRIPTDIR/provision_azure-conf.sh
+fi
 
 #
 #
