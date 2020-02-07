@@ -27,10 +27,12 @@ AZURE_RT_MAC=12:34:56:78:9a:bc
 # ROUTER interface towards VM1
 ROUTER_VM1_IF=eth1
 ROUTER_VM1_IF_PCI=0002:00:02.0 # rename6
+ROUTER_VM1_IF_NAME=FailsafeEthernet2
 ROUTER_VM1_IP=20.0.2.10
 
 # ROUTER interface towards VM2
 ROUTER_VM2_IF=eth2
+ROUTER_VM2_IF_NAME=FailsafeEthernet4
 ROUTER_VM2_IF_PCI=0003:00:02.0 # rename7
 ROUTER_VM2_BASE_IP=20.0.4.10
 ROUTER_VM2_IP=20.0.4.64
@@ -40,6 +42,7 @@ ROUTER_VM2_LAST_IP=20.0.4.127
 # ROUTER interface towards VM1
 ROUTER2_VM1_IF=eth1
 ROUTER2_VM1_IF_PCI=0000:00:06.0
+ROUTER2_VM1_IF_NAME=FailsafeEthernet2
 ROUTER2_VM1_BASE_IP=20.0.4.12
 ROUTER2_VM1_IP=20.0.4.128
 ROUTER2_VM1_IP_PREFIX=20.0.4.128/26
@@ -47,6 +50,7 @@ ROUTER2_VM1_LAST_IP=20.0.4.191
 
 # ROUTER interface towards VM2
 ROUTER2_VM2_IF=eth2
+ROUTER2_VM2_IF_NAME=FailsafeEthernet4
 ROUTER2_VM2_IF_PCI=0000:00:07.0
 ROUTER2_VM2_IP=20.0.7.10
 
@@ -106,13 +110,19 @@ VM2_IP3_IT=($(ip_it $VM2_IP3 $VM2_LAST_IP3))
 ROUTER_VM2_IP_IT=($(ip_it $ROUTER_VM2_IP $ROUTER_VM2_LAST_IP))
 ROUTER2_VM1_IP_IT=($(ip_it $ROUTER2_VM1_IP $ROUTER2_VM1_LAST_IP))
 
+# IP_CNT=${#VM1_IP_IT[@]}
+IP_CNT=4
+
 azure_configure_test_pmd ()
 {
   sudo modprobe -a ib_uverbs
   sudo modprobe mlx4_ib
   sudo sysctl -w vm.nr_hugepages=1024
 
-  azure_configure_linux_router $1 # Slow path for now
+  # azure_configure_linux_router $1 # Slow path for now
+  sudo ip addr flush dev $ROUTER_VM1_IF
+  sudo ip addr flush dev $ROUTER_VM2_IF
+  sudo sysctl net.ipv4.ip_forward=0
 
   sudo LD_LIBRARY_PATH=$VPP_LIB_DIR $TESTPMD  \
     -w $ROUTER_VM1_IF_PCI                     \
@@ -138,15 +148,15 @@ azure_configure_vm1 ()
   # OK
   sudo ip link set $VM1_IF down
   sudo ip link set $VM1_IF up
-  sudo ip route del $VM2_IP2_PREFIX || true
   sudo ip addr flush dev $VM1_IF
 
-  for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+  for ((i = 0; i < $IP_CNT; i++)); do
     sudo ip addr add ${VM1_IP_IT[$i]}/26 dev $VM1_IF || true
   done
-  sudo ip route add $VM2_IP_PREFIX dev $VM1_IF via $ROUTER_VM1_IP || true
-  sudo ip route add $VM2_IP2_PREFIX dev $VM1_IF via $ROUTER_VM1_IP || true
-  sudo ip route add $VM2_IP3_PREFIX dev $VM1_IF via $VM2_BASE_IP3 || true
+  sleep 1
+  sudo ip route add $VM2_IP_PREFIX via $ROUTER_VM1_IP || true
+  sudo ip route add $VM2_IP2_PREFIX via $ROUTER_VM1_IP || true
+  sudo ip route add $VM2_IP3_PREFIX via $VM2_BASE_IP3 || true
 
   sudo ip link set $VM1_IF mtu $MTU
 }
@@ -173,21 +183,20 @@ azure_configure_vm2 ()
   sudo ip link set $VM2_IF3 up
   sudo ip addr flush dev $VM2_IF3
 
-  sudo ip route del $VM1_IP_PREFIX || true
-
-  for ((i = 0; i < ${#VM1_IP_IT[@]}; i++)); do
+  for ((i = 0; i < $IP_CNT; i++)); do
     sudo ip addr add ${VM2_IP_IT[$i]}/26 dev $VM2_IF || true
     sudo ip addr add ${VM2_IP2_IT[$i]}/26 dev $VM2_IF2 || true
     sudo ip addr add ${VM2_IP3_IT[$i]}/26 dev $VM2_IF3 || true
   done
+  sleep 2
   if [[ "$1" = "one" ]] ; then
     # one hop route to VM1
-    sudo ip route add $VM1_IP_PREFIX dev $VM2_IF2 via $ROUTER_VM2_BASE_IP || true
+    sudo ip route add $VM1_IP_PREFIX via $ROUTER_VM2_BASE_IP || true
   elif [[ "$1" = "zero" ]]; then
     # zero hop route to VM1
-    sudo ip route add $VM1_IP_PREFIX dev $VM2_IF3 via $VM1_BASE_IP || true
+    sudo ip route add $VM1_IP_PREFIX via $VM1_BASE_IP || true
   elif [[ "$1" = "two" ]]; then
-    sudo ip route add $VM1_IP_PREFIX dev $VM2_IF via $ROUTER2_VM2_IP || true
+    sudo ip route add $VM1_IP_PREFIX via $ROUTER2_VM2_IP || true
   else
     echo "Wot ?"
   fi
@@ -214,7 +223,7 @@ azure_configure_linux_router ()
     sudo ip route add $VM1_IP_PREFIX dev $ROUTER_VM1_IF via $ROUTER_VM2_BASE_IP || true
     sudo ip route add $VM2_IP_PREFIX dev $ROUTER_VM2_IF via $VM2_BASE_IP || true
   else
-    # One hop
+    echo "One hop"
     sudo ip addr add $ROUTER_VM1_IP/24 dev $ROUTER_VM1_IF
     sudo ip addr add $ROUTER_VM2_BASE_IP/24 dev $ROUTER_VM2_IF
 
@@ -252,12 +261,14 @@ install_deps ()
   fi
 }
 
-create_vpp_startup_conf ()
+azure_create_vpp_startup_conf ()
 {
   if [[ "$WRK" = "1" ]]; then
-    CORELIST_WORKERS="1"
+    CORELIST_WORKERS="corelist-workers 1"
+  elif [[ "$WRK" = "0" ]]; then
+    CORELIST_WORKERS="workers 0"
   else
-    CORELIST_WORKERS="1-$WRK"
+    CORELIST_WORKERS="corelist-workers 1-$WRK"
   fi
   sudo mkdir -p $VPP_RUN_DIR
 
@@ -268,30 +279,28 @@ create_vpp_startup_conf ()
   fi
 
   echo "
-unix {
-  $MODE
-  log $VPP_RUN_DIR/vpp.log
-  cli-listen $VPP_RUN_DIR/cli.sock
-  exec $VPP_RUN_DIR/startup.conf
-}
-cpu {
-  main-core 0
-  corelist-workers $CORELIST_WORKERS
-}
-dpdk {
-  dev default { num-rx-queues $WRK num-rx-desc 1024 }
-  vdev net_vdev_netvsc0,iface=eth0,ignore=1
-  vdev net_vdev_netvsc1,iface=eth1
-  vdev net_vdev_netvsc2,iface=eth2
-  dev $ROUTER_VM1_IF_PCI { name VM1_IF }
-  dev $ROUTER_VM2_IF_PCI { name VM2_IF }
-  log-level eal:8
-}
-buffers {
-   buffers-per-numa 131072
-   default data-size 4096
-}
-" | sudo tee $VPP_RUN_DIR/vpp.conf > /dev/null
+    unix {
+      $MODE
+      log $VPP_RUN_DIR/vpp.log
+      cli-listen $VPP_RUN_DIR/cli.sock
+      exec $VPP_RUN_DIR/startup.conf
+    }
+    cpu {
+      main-core 0
+      $CORELIST_WORKERS
+    }
+    dpdk {
+      dev default { num-rx-queues $WRK num-rx-desc 1024 }
+      vdev net_vdev_netvsc0,iface=eth1
+      vdev net_vdev_netvsc2,iface=eth2
+      dev $ROUTER_VM1_IF_PCI { name VM1_IF }
+      dev $ROUTER_VM2_IF_PCI { name VM2_IF }
+    }
+    buffers {
+      buffers-per-numa 131072
+      default data-size 4096
+    }
+  " | sudo tee $VPP_RUN_DIR/vpp.conf > /dev/null
 }
 
 azure_configure_vpp ()
@@ -301,47 +310,49 @@ azure_configure_vpp ()
   sudo modprobe mlx4_ib
   sudo sysctl -w vm.nr_hugepages=1024
 
-  azure_configure_linux_router $1 # Slow path for now
+  # azure_configure_linux_router $1 # Slow path for now
+  sudo ip addr flush dev $ROUTER_VM1_IF
+  sudo ip addr flush dev $ROUTER_VM2_IF
+  sudo sysctl net.ipv4.ip_forward=0
 
-  create_vpp_startup_conf
+  azure_create_vpp_startup_conf
 
   echo "
-    set int st VM1_IF up
-    set int st VM2_IF up
-
+    set int state $ROUTER_VM1_IF_NAME up
+    set int state $ROUTER_VM2_IF_NAME up
   " | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
 
   if [[ "$1" = "1" ]] ; then
     echo "
-      set int ip addr VM1_IF $ROUTER_VM1_IP/24
-      set int ip addr VM2_IF $ROUTER_VM2_BASE_IP/24
+      set int ip addr $ROUTER_VM1_IF_NAME $ROUTER_VM1_IP/24
+      set int ip addr $ROUTER_VM2_IF_NAME $ROUTER_VM2_BASE_IP/24
 
-      set ip neighbor VM1_IF $VM1_BASE_IP ${AZURE_RT_MAC//[$'\r']}
-      set ip neighbor VM2_IF $ROUTER2_VM1_BASE_IP ${AZURE_RT_MAC//[$'\r']}
+      set ip neighbor $ROUTER_VM1_IF_NAME $VM1_BASE_IP ${AZURE_RT_MAC//[$'\r']}
+      set ip neighbor $ROUTER_VM2_IF_NAME $ROUTER2_VM1_BASE_IP ${AZURE_RT_MAC//[$'\r']}
 
-      ip route add $VM1_IP_PREFIX via $VM1_BASE_IP VM1_IF
-      ip route add $VM2_IP_PREFIX via $ROUTER2_VM1_BASE_IP VM2_IF
+      ip route add $VM1_IP_PREFIX via $VM1_BASE_IP $ROUTER_VM1_IF_NAME
+      ip route add $VM2_IP_PREFIX via $ROUTER2_VM1_BASE_IP $ROUTER_VM2_IF_NAME
     " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
   elif [[ "$1" = "2" ]] ; then
     echo "
-      set int ip addr VM1_IF $ROUTER2_VM1_BASE_IP/24
-      set int ip addr VM2_IF $ROUTER2_VM2_IP/24
+      set int ip addr $ROUTER_VM1_IF_NAME $ROUTER2_VM1_BASE_IP/24
+      set int ip addr $ROUTER_VM2_IF_NAME $ROUTER2_VM2_IP/24
 
-      set ip neighbor VM1_IF $ROUTER_VM2_BASE_IP ${AZURE_RT_MAC//[$'\r']}
-      set ip neighbor VM2_IF $VM2_BASE_IP ${AZURE_RT_MAC//[$'\r']}
+      set ip neighbor $ROUTER_VM1_IF_NAME $ROUTER_VM2_BASE_IP ${AZURE_RT_MAC//[$'\r']}
+      set ip neighbor $ROUTER_VM2_IF_NAME $VM2_BASE_IP ${AZURE_RT_MAC//[$'\r']}
 
-      ip route add $VM1_IP_PREFIX via $ROUTER_VM2_BASE_IP VM1_IF
-      ip route add $VM2_IP_PREFIX via $VM2_BASE_IP VM2_IF
+      ip route add $VM1_IP_PREFIX via $ROUTER_VM2_BASE_IP $ROUTER_VM1_IF_NAME
+      ip route add $VM2_IP_PREFIX via $VM2_BASE_IP $ROUTER_VM2_IF_NAME
     " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
   else
     echo "
-      set int ip addr VM1_IF $ROUTER_VM1_IP/24
-      set int ip addr VM2_IF $ROUTER_VM2_BASE_IP/24
+      set int ip addr $ROUTER_VM1_IF_NAME $ROUTER_VM1_IP/24
+      set int ip addr $ROUTER_VM2_IF_NAME $ROUTER_VM2_BASE_IP/24
     " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
-    for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+    for ((i = 0; i < $IP_CNT; i++)); do
       echo "
-	set ip neighbor VM1_IF ${VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
-	set ip neighbor VM2_IF ${VM2_IP2_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+	set ip neighbor $ROUTER_VM1_IF_NAME ${VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+	set ip neighbor $ROUTER_VM2_IF_NAME ${VM2_IP2_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
       " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
     done
   fi
@@ -374,30 +385,30 @@ azure_configure_ipsec ()
   sudo pkill vpp || true
   sudo modprobe -a ib_uverbs
   sudo modprobe mlx4_ib
-  sudo sysctl -w vm.nr_hugepages=2048
+  sudo sysctl -w vm.nr_hugepages=1024
 
-  azure_configure_linux_router $1 # Slow path for now
+  # azure_configure_linux_router $1 # Slow path for now
+  sudo ip addr flush dev $ROUTER_VM1_IF
+  sudo ip addr flush dev $ROUTER_VM2_IF
+  sudo sysctl net.ipv4.ip_forward=0
 
-  create_vpp_startup_conf
+  azure_create_vpp_startup_conf
 
 echo "
-    set int st VM1_IF up
-    set int st VM2_IF up
-
-    set int mtu $MTU VM1_IF
-    set int mtu $MTU VM2_IF
-
+    set int st $ROUTER_VM1_IF_NAME up
+    set int st $ROUTER_VM2_IF_NAME up
   " | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
 
   if [[ "$1" = "1" ]] ; then
     echo "
-      set int ip addr VM1_IF $ROUTER_VM1_IP/24
-      set int ip addr VM2_IF $ROUTER_VM2_BASE_IP/24
+      set int ip addr $ROUTER_VM1_IF_NAME $ROUTER_VM1_IP/24
+      set int ip addr $ROUTER_VM2_IF_NAME $ROUTER_VM2_BASE_IP/24
 
-      ip route add $VM1_IP_PREFIX via $VM1_BASE_IP VM1_IF
+      ip route add $VM1_IP_PREFIX via $VM1_BASE_IP $ROUTER_VM1_IF_NAME
+      set ip neighbor $ROUTER_VM1_IF_NAME $VM1_BASE_IP ${AZURE_RT_MAC//[$'\r']}
     " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
 
-    for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+    for ((i = 0; i < $IP_CNT; i++)); do
       echo "
 	create ipip tunnel src ${ROUTER_VM2_IP_IT[$i]} dst ${ROUTER2_VM1_IP_IT[$i]}
 
@@ -409,23 +420,24 @@ echo "
 	set int ip addr ipip$i 127.0.0.$((i+1))/32
 
 	ip route add ${VM2_IP_IT[$i]}/32 via ipip$i
-	set int ip addr VM2_IF ${ROUTER_VM2_IP_IT[$i]}/24
+	set int ip addr $ROUTER_VM2_IF_NAME ${ROUTER_VM2_IP_IT[$i]}/24
 
-	set ip neighbor VM1_IF ${VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
-	set ip neighbor VM2_IF ${ROUTER2_VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+	set ip neighbor $ROUTER_VM1_IF_NAME ${VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+	set ip neighbor $ROUTER_VM2_IF_NAME ${ROUTER2_VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
       " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
     done
 
 
   elif [[ "$1" = "2" ]] ; then
     echo "
-      set int ip addr VM1_IF $ROUTER2_VM1_BASE_IP/24
-      set int ip addr VM2_IF $ROUTER2_VM2_IP/24
+      set int ip addr $ROUTER_VM1_IF_NAME $ROUTER2_VM1_BASE_IP/24
+      set int ip addr $ROUTER_VM2_IF_NAME $ROUTER2_VM2_IP/24
 
-      ip route add $VM2_IP_PREFIX via $VM2_BASE_IP VM2_IF
+      ip route add $VM2_IP_PREFIX via $VM2_BASE_IP $ROUTER_VM2_IF_NAME
+      set ip neighbor $ROUTER2_VM2_IF_NAME $VM2_BASE_IP ${AZURE_RT_MAC//[$'\r']}
     " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
 
-    for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+    for ((i = 0; i < $IP_CNT; i++)); do
       echo "
 	create ipip tunnel src ${ROUTER2_VM1_IP_IT[$i]} dst ${ROUTER_VM2_IP_IT[$i]}
 
@@ -437,10 +449,10 @@ echo "
 	set int ip addr ipip$i 127.0.0.$((i+1))/32
 
 	ip route add ${VM1_IP_IT[$i]}/32 via ipip$i
-	set int ip addr VM1_IF ${ROUTER2_VM1_IP_IT[$i]}/24
+	set int ip addr $ROUTER_VM1_IF_NAME ${ROUTER2_VM1_IP_IT[$i]}/24
 
-	set ip neighbor VM2_IF ${VM2_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
-	set ip neighbor VM1_IF ${ROUTER_VM2_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+	set ip neighbor $ROUTER_VM2_IF_NAME ${VM2_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+	set ip neighbor $ROUTER_VM1_IF_NAME ${ROUTER_VM2_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
       " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
     done
 

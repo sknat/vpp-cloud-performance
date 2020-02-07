@@ -250,12 +250,27 @@ create_switches ()
   attach_nic sw2-if2 sw2 2
 }
 
+change_switch_type ()
+{
+  SW1_ID=$(cat $LOGDIR/create-instance-sw1.log | jq -r '.Instances[0].InstanceId')
+  SW2_ID=$(cat $LOGDIR/create-instance-sw2.log | jq -r '.Instances[0].InstanceId')
+  aws ec2 modify-instance-attribute \
+    --instance-id $SW1_ID \
+    --instance-type $1
+  aws ec2 modify-instance-attribute \
+    --instance-id $SW2_ID \
+    --instance-type $1
+}
+
 if [[ "$1" = "create" ]]; then
   check_params
   create_vpc
   create_bastion
   create_vm
   create_switches
+elif [[ "$1" = "change" ]]; then
+  check_params
+  change_switch_type ${@:2}
 else
   echo "Usage:"
   echo "./provision_azure.sh create"

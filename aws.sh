@@ -2,6 +2,10 @@
 
 set -e
 
+if [[ "$X" != "" ]]; then
+  set -x
+fi
+
 # ------------------------------
 
 
@@ -16,12 +20,20 @@ VM1_IP_PREFIX=20.0.2/24
 VM1_LAST_IP=20.0.2.100
 VM1_IF=ens6
 
-VM1_MAC=02:bd:5b:aa:df:a5
-ROUTER_VM1_MAC=02:45:d3:96:a4:9b
-ROUTER_VM2_MAC=02:45:d3:96:a4:9b
-ROUTER2_VM1_MAC=
-ROUTER2_VM2_MAC=
-VM2_MAC=02:bc:f7:69:06:95
+VM1_MAC=02:a6:3b:7c:8e:7c
+ROUTER_VM1_MAC=02:f6:51:84:6a:a2
+ROUTER_VM2_MAC=02:c2:c6:31:b4:16
+ROUTER2_VM1_MAC=02:1c:0d:2a:ab:1a
+ROUTER2_VM2_MAC=02:59:9f:b7:3e:06
+VM2_MAC=02:56:5b:e5:38:22
+
+
+# VM1_MAC=02:bd:5b:aa:df:a5
+# ROUTER_VM1_MAC=02:45:d3:96:a4:9b
+# ROUTER_VM2_MAC=02:c1:02:72:5f:73
+# ROUTER2_VM1_MAC=02:eb:0d:71:55:0f
+# ROUTER2_VM2_MAC=02:73:7a:a5:4c:65
+# VM2_MAC=02:bc:f7:69:06:95
 
 # ROUTER interface towards VM1
 ROUTER_VM1_IF=ens6
@@ -30,11 +42,11 @@ ROUTER_VM1_IP=20.0.3.1
 ROUTER_VM1_NAME=VirtualFunctionEthernet0/6/0
 
 # ROUTER interface towards VM2
-ROUTER_VM2_IF=ens6
+ROUTER_VM2_IF=ens7
 ROUTER_VM2_IF_PCI=0000:00:07.0
 ROUTER_VM2_IP=20.0.4.1
 ROUTER_VM2_LAST_IP=20.0.4.100
-ROUTER_VM2_NAME=VirtualFunctionEthernet0/6/0
+ROUTER_VM2_NAME=VirtualFunctionEthernet0/7/0
 
 # ROUTER interface towards VM1
 ROUTER2_VM1_IF=ens6
@@ -47,7 +59,7 @@ ROUTER2_VM1_NAME=VirtualFunctionEthernet0/6/0
 ROUTER2_VM2_IF=ens7
 ROUTER2_VM2_IF_PCI=0000:00:07.0
 ROUTER2_VM2_IP=20.0.6.1
-ROUTER2_VM2_NAME=VirtualFunctionEthernet0/6/0
+ROUTER2_VM2_NAME=VirtualFunctionEthernet0/7/0
 
 VM2_IP=20.0.7.1
 VM2_IP_PREFIX=20.0.7/24
@@ -57,6 +69,9 @@ VM2_IF=ens6
 if [[ "$AES" = "256" ]]; then
   CRYPTO_KEY=6541686776336961656264656f6f65796541686776336961656264656f6f6579
   CRYPTO_ALG=aes-gcm-256
+elif [[ "$AES" = "CBC128" ]]; then
+  CRYPTO_KEY=6541686776336961656264656f6f6579
+  CRYPTO_ALG=aes-cbc-128
 else
   CRYPTO_KEY=6541686776336961656264656f6f6579
   CRYPTO_ALG=aes-gcm-128
@@ -88,6 +103,9 @@ VM2_IP_IT=($(ip_it $VM2_IP $VM2_LAST_IP))
 ROUTER_VM2_IP_IT=($(ip_it $ROUTER_VM2_IP $ROUTER_VM2_LAST_IP))
 ROUTER2_VM1_IP_IT=($(ip_it $ROUTER2_VM1_IP $ROUTER2_VM1_LAST_IP))
 
+# IP_CNT=${#VM1_IP_IT[@]}
+IP_CNT=4
+
 configure_test_pmd ()
 {
   sudo modprobe vfio-pci
@@ -117,10 +135,10 @@ configure_vm1 ()
   sudo ip link set $VM1_IF down
   sudo ip link set $VM1_IF up
   sudo ip addr flush dev $VM1_IF
-  for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+  for ((i = 0; i < ${IP_CNT}; i++)); do
     sudo ip addr add ${VM1_IP_IT[$i]}/24 dev $VM1_IF || true
   done
-  for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+  for ((i = 0; i < ${IP_CNT}; i++)); do
     sudo arp -i $VM1_IF -s ${VM2_IP_IT[$i]} ${NXT_HOP//[$'\r']}
   done
   sudo ip link set $VM1_IF mtu $MTU
@@ -143,24 +161,54 @@ configure_vm2 ()
   sudo ip route add 20.0.2.0/24 dev $VM2_IF
 }
 
-configure_linux_router ()
+aws_configure_linux_router ()
 {
+  # Cleanup
+  sudo pkill vpp || true
+  sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM1_IF_PCI
+  if [[ "$ROUTER_VM2_IF_PCI" != "" ]]; then
+    sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM2_IF_PCI
+  fi
+  sudo ip link set $ROUTER_VM1_IF down
   sudo ip link set $ROUTER_VM1_IF up
+  sudo ip link set $ROUTER_VM2_IF down
   sudo ip link set $ROUTER_VM2_IF up
+  sudo ip addr flush dev $ROUTER_VM1_IF
+  sudo ip addr flush dev $ROUTER_VM2_IF
 
-  sudo ip addr add $ROUTER_VM1_IP dev $ROUTER_VM1_IF || true
-  sudo ip addr add $ROUTER_VM2_IP dev $ROUTER_VM2_IF || true
-  sudo ip route add $VM1_IP_PREFIX via $ROUTER_VM1_IP || true
-  sudo ip route add $VM2_IP_PREFIX via $ROUTER_VM2_IP || true
   sudo sysctl net.ipv4.ip_forward=1
 
-  for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
-    sudo arp -i $ROUTER_VM1_IF -s ${VM1_IP_IT[$i]} ${VM1_MAC//[$'\r']}
-    sudo arp -i $ROUTER_VM2_IF -s ${VM2_IP_IT[$i]} ${VM2_MAC//[$'\r']}
-  done
+  if [[ "$1" = "1" ]] ; then
+    sudo ip addr add $ROUTER_VM1_IP/24 dev $ROUTER_VM1_IF
+    sudo ip addr add $ROUTER_VM2_IP/24 dev $ROUTER_VM2_IF
+    sudo ip route add $VM1_IP_PREFIX via $ROUTER_VM1_IP || true
+    sudo ip route add $VM2_IP_PREFIX via $ROUTER_VM2_IP || true
+    for ((i = 0; i < ${IP_CNT}; i++)); do
+      sudo arp -i $ROUTER_VM1_IF -s ${VM1_IP_IT[$i]} ${VM1_MAC//[$'\r']}
+      sudo arp -i $ROUTER_VM2_IF -s ${VM2_IP_IT[$i]} ${ROUTER2_VM1_MAC//[$'\r']}
+    done
+  elif [[ "$1" = "2" ]] ; then
+    sudo ip addr add $ROUTER2_VM1_IP/24 dev $ROUTER_VM1_IF || true
+    sudo ip addr add $ROUTER2_VM2_IP/24 dev $ROUTER_VM2_IF || true
+    sudo ip route add $VM1_IP_PREFIX via $ROUTER2_VM1_IP || true
+    sudo ip route add $VM2_IP_PREFIX via $ROUTER2_VM2_IP || true
+    for ((i = 0; i < ${IP_CNT}; i++)); do
+      sudo arp -i $ROUTER_VM1_IF -s ${VM1_IP_IT[$i]} ${ROUTER_VM2_MAC//[$'\r']}
+      sudo arp -i $ROUTER_VM2_IF -s ${VM2_IP_IT[$i]} ${VM2_MAC//[$'\r']}
+    done
+  else
+    echo "One hop"
+    sudo ip addr add $ROUTER_VM1_IP/24 dev $ROUTER_VM1_IF || true
+    sudo ip addr add $ROUTER_VM2_IP/24 dev $ROUTER_VM2_IF || true
+    sudo ip route add $VM1_IP_PREFIX via $ROUTER_VM1_IP || true
+    sudo ip route add $VM2_IP_PREFIX via $ROUTER_VM2_IP || true
 
-  sudo ip link set $ROUTER_VM1_IF mtu $MTU
-  sudo ip link set $ROUTER_VM2_IF mtu $MTU
+    for ((i = 0; i < ${IP_CNT}; i++)); do
+      sudo arp -i $ROUTER_VM1_IF -s ${VM1_IP_IT[$i]} ${VM1_MAC//[$'\r']}
+      sudo arp -i $ROUTER_VM2_IF -s ${VM2_IP_IT[$i]} ${VM2_MAC//[$'\r']}
+    done
+  fi
+
 }
 
 install_deps ()
@@ -182,9 +230,23 @@ install_deps ()
 create_vpp_startup_conf ()
 {
   if [[ "$WRK" = "1" ]]; then
-    CORELIST_WORKERS="1"
+    CORELIST_WORKERS="corelist-workers 1"
+  elif [[ "$WRK" = "0" ]]; then
+    CORELIST_WORKERS="workers 0"
   else
-    CORELIST_WORKERS="1-$WRK"
+    CORELIST_WORKERS="corelist-workers 1-$WRK"
+  fi
+  if [[ "$ROUTER_VM2_IF_PCI" != "" ]]; then
+    IF_PCI2="dev $ROUTER_VM2_IF_PCI"
+  else
+    IF_PCI2=""
+  fi
+  if [[ "$BUILD" != "" ]]; then
+    echo "Using build-$BUILD"
+    cd $VPP_DIR/build-root
+    rm install-vpp-native
+    ln -s build-$BUILD install-vpp-native
+    cd ~
   fi
   sudo mkdir -p $VPP_RUN_DIR
   echo "
@@ -195,20 +257,20 @@ unix {
 }
 cpu {
   main-core 0
-  corelist-workers $CORELIST_WORKERS
+  $CORELIST_WORKERS
 }
 dpdk {
+  dev default { num-rx-queues 8 num-rx-desc 1024 }
   uio-driver $DPDK_DRIVER
-  dev default { num-rx-queues 6 num-rx-desc 4096 }
   dev $ROUTER_VM1_IF_PCI
-  dev $ROUTER_VM2_IF_PCI
+  $IF_PCI2
 }
 buffers {
-   buffers-per-numa 262144
+   buffers-per-numa 131072
    default data-size 8192
 }
 " | sudo tee $VPP_RUN_DIR/vpp.conf > /dev/null
-  sudo sysctl -w vm.nr_hugepages=2048
+  sudo sysctl -w vm.nr_hugepages=1024
 }
 
 configure_vpp_nic_drivers ()
@@ -238,13 +300,63 @@ set int ip address $ROUTER_VM2_NAME 127.0.0.2/32
 ip route add $VM1_IP/24 via $ROUTER_VM1_NAME
 ip route add $VM2_IP/24 via $ROUTER_VM2_NAME
 
-set int mtu $MTU $ROUTER_VM1_NAME
-set int mtu $MTU $ROUTER_VM2_NAME
 " | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
 
-  for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+  for ((i = 0; i < ${IP_CNT}; i++)); do
     echo "
 set ip neighbor $ROUTER_VM1_NAME ${VM1_IP_IT[$i]} ${VM1_MAC//[$'\r']}
+set ip neighbor $ROUTER_VM2_NAME ${VM2_IP_IT[$i]} ${VM2_MAC//[$'\r']}
+" | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
+  done
+
+  run_vpp
+}
+
+configure_vpp1 ()
+{
+  configure_vpp_nic_drivers $1
+  create_vpp_startup_conf
+
+  # ----------------- Startup CLIs -----------------
+  echo "
+set int state $ROUTER_VM1_NAME up
+set int state $ROUTER_VM2_NAME up
+set int ip address $ROUTER_VM1_NAME 127.0.0.1/32
+set int ip address $ROUTER_VM2_NAME 127.0.0.2/32
+ip route add $VM1_IP/24 via $ROUTER_VM1_NAME
+ip route add $VM2_IP/24 via $ROUTER_VM2_NAME
+
+" | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
+
+  for ((i = 0; i < ${IP_CNT}; i++)); do
+    echo "
+set ip neighbor $ROUTER_VM1_NAME ${VM1_IP_IT[$i]} ${VM1_MAC//[$'\r']}
+set ip neighbor $ROUTER_VM2_NAME ${VM2_IP_IT[$i]} ${ROUTER2_VM1_MAC//[$'\r']}
+" | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
+  done
+
+  run_vpp
+}
+
+configure_vpp2 ()
+{
+  configure_vpp_nic_drivers $1
+  create_vpp_startup_conf
+
+  # ----------------- Startup CLIs -----------------
+  echo "
+set int state $ROUTER_VM1_NAME up
+set int state $ROUTER_VM2_NAME up
+set int ip address $ROUTER_VM1_NAME 127.0.0.1/32
+set int ip address $ROUTER_VM2_NAME 127.0.0.2/32
+ip route add $VM1_IP/24 via $ROUTER_VM1_NAME
+ip route add $VM2_IP/24 via $ROUTER_VM2_NAME
+
+" | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
+
+  for ((i = 0; i < ${IP_CNT}; i++)); do
+    echo "
+set ip neighbor $ROUTER_VM1_NAME ${VM1_IP_IT[$i]} ${ROUTER_VM2_MAC//[$'\r']}
 set ip neighbor $ROUTER_VM2_NAME ${VM2_IP_IT[$i]} ${VM2_MAC//[$'\r']}
 " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
   done
@@ -269,7 +381,9 @@ unconfigure_all ()
 {
   sudo pkill vpp || true
   sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM1_IF_PCI
-  sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM2_IF_PCI
+  if [[ "$ROUTER_VM2_IF_PCI" != "" ]]; then
+    sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM2_IF_PCI
+  fi
   sudo ip link set $ROUTER_VM1_IF down
   sudo ip link set $ROUTER_VM2_IF down
 }
@@ -278,7 +392,9 @@ configure_vpp_ipsec_1 ()
 {
   sudo pkill vpp || true
   sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM1_IF_PCI
-  sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM2_IF_PCI
+  if [[ "$ROUTER_VM2_IF_PCI" != "" ]]; then
+    sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM2_IF_PCI
+  fi
   sudo ip link set $ROUTER_VM1_IF down
   sudo ip link set $ROUTER_VM2_IF down
 
@@ -294,7 +410,7 @@ set int ip address $ROUTER_VM1_NAME $ROUTER_VM1_IP/32
 ip route add $ROUTER2_VM1_IP/32 via $ROUTER_VM2_NAME
 " | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
 
-  for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+  for ((i = 0; i < ${IP_CNT}; i++)); do
     echo "
 set int ip address $ROUTER_VM2_NAME ${ROUTER_VM2_IP_IT[$i]}/32
 create ipip tunnel src ${ROUTER_VM2_IP_IT[$i]} dst ${ROUTER2_VM1_IP_IT[$i]}
@@ -320,10 +436,12 @@ ip route add ${ROUTER2_VM1_IP_IT[$i]}/32 via $ROUTER_VM2_NAME
 configure_vpp_ipsec_2 ()
 {
   sudo pkill vpp || true
-  sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM1_IF_PCI
-  sudo $DPDK_DEVBIND --force -b ena $ROUTER_VM2_IF_PCI
-  sudo ip link set $ROUTER_VM1_IF down
-  sudo ip link set $ROUTER_VM2_IF down
+  sudo $DPDK_DEVBIND --force -b ena $ROUTER2_VM1_IF_PCI
+  if [[ "$ROUTER2_VM2_IF_PCI" != "" ]]; then
+    sudo $DPDK_DEVBIND --force -b ena $ROUTER2_VM2_IF_PCI
+  fi
+  sudo ip link set $ROUTER2_VM1_IF down
+  sudo ip link set $ROUTER2_VM2_IF down
 
   configure_vpp_nic_drivers $1
   create_vpp_startup_conf
@@ -336,7 +454,7 @@ set int ip address $ROUTER2_VM2_NAME $ROUTER2_VM2_IP/32
 
 " | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
 
-  for ((i = 0; i < ${#VM2_IP_IT[@]}; i++)); do
+  for ((i = 0; i < ${IP_CNT}; i++)); do
     echo "
 set int ip address $ROUTER2_VM1_NAME ${ROUTER2_VM1_IP_IT[$i]}/32
 create ipip tunnel src ${ROUTER2_VM1_IP_IT[$i]} dst ${ROUTER_VM2_IP_IT[$i]}
@@ -367,8 +485,13 @@ aws_test_cli ()
     unconfigure_all
     configure_test_pmd
   elif [[ "$1" = "linux" ]]; then
+    aws_configure_linux_router ${@:2}
+  elif [[ "$1 $2" = "vpp 1" ]]; then
     unconfigure_all
-    configure_linux_router
+    configure_vpp1 ${@:3}
+  elif [[ "$1 $2" = "vpp 2" ]]; then
+    unconfigure_all
+    configure_vpp2 ${@:3}
   elif [[ "$1" = "vpp" ]]; then
     unconfigure_all
     configure_vpp ${@:2}
