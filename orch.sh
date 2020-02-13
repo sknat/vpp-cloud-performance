@@ -49,9 +49,8 @@ move_startup_logs ()
 {
   local name=$(get_test_name)
   mv /tmp/vpp-startup-sw1.log ~/currentrun/$name/startup-sw1.log
-  mv /tmp/vpp-startup-sw12log ~/currentrun/$name/startup-sw2.log
+  mv /tmp/vpp-startup-sw2.log ~/currentrun/$name/startup-sw2.log
 }
-
 
 configure_switches () # WRK
 {
@@ -98,39 +97,15 @@ get_test_name ()
 TARGET=./test/aws.sh
 
 # MACHINE=m6g.medium CONF=vpp-vpp MTU=1500 FORKS=1  FLOWS=1  BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-# MACHINE=m6g.medium CONF=vpp-vpp MTU=1500 FORKS=1  FLOWS=16 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-# MACHINE=m6g.medium CONF=vpp-vpp MTU=1500 FORKS=16 FLOWS=16 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-
-# MACHINE=m6g.medium CONF=vpp-vpp MTU=200 FORKS=1  FLOWS=1  BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-# MACHINE=m6g.medium CONF=vpp-vpp MTU=200 FORKS=1  FLOWS=16 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-# MACHINE=m6g.medium CONF=vpp-vpp MTU=200 FORKS=16 FLOWS=16 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-
-# MACHINE=m6g.medium CONF=vpp-vpp MTU=1500 FORKS=1  FLOWS=1  BUILD=mq WRK=0 RXQ=8 PAGES=512 test_multi_flows
-# MACHINE=m6g.medium CONF=vpp-vpp MTU=1500 FORKS=1  FLOWS=16 BUILD=mq WRK=0 RXQ=8 PAGES=512 test_multi_flows
-# MACHINE=m6g.medium CONF=vpp-vpp MTU=1500 FORKS=16 FLOWS=16 BUILD=mq WRK=0 RXQ=8 PAGES=512 test_multi_flows
-
-# MACHINE=m6g.medium CONF=vpp-vpp MTU=200 FORKS=1  FLOWS=1  BUILD=mq WRK=0 RXQ=8 PAGES=512 test_multi_flows
-# MACHINE=m6g.medium CONF=vpp-vpp MTU=200 FORKS=1  FLOWS=16 BUILD=mq WRK=0 RXQ=8 PAGES=512 test_multi_flows
-# MACHINE=m6g.medium CONF=vpp-vpp MTU=200 FORKS=16 FLOWS=16 BUILD=mq WRK=0 RXQ=8 PAGES=512 test_multi_flows
-
 # MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=1  FLOWS=1 AES=256 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-# MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=16 FLOWS=1 AES=256 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=32 FLOWS=1 AES=256 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
 
-MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=1  FLOWS=1 AES=128 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=16 FLOWS=1 AES=128 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=32 FLOWS=1 AES=128 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
+MACHINE=m6g.medium CONF=ipsec MTU=200 FORKS=1  FLOWS=1 AES=256 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
+MACHINE=m6g.medium CONF=ipsec MTU=200 FORKS=16 FLOWS=1 AES=256 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
+MACHINE=m6g.medium CONF=ipsec MTU=200 FORKS=32 FLOWS=1 AES=256 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
 
-MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=1  FLOWS=1 AES=CBC128 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=16 FLOWS=1 AES=CBC128 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=32 FLOWS=1 AES=CBC128 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-
-MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=1  FLOWS=1 AES=CBC128 BUILD=crypto WRK=0 RXQ=8 PAGES=512 test_multi_flows
-MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=16 FLOWS=1 AES=CBC128 BUILD=crypto WRK=0 RXQ=8 PAGES=512 test_multi_flows
-MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=32 FLOWS=1 AES=CBC128 BUILD=crypto WRK=0 RXQ=8 PAGES=512 test_multi_flows
-
-
-
+MACHINE=m6g.medium CONF=ipsec MTU=200 FORKS=1  FLOWS=1 AES=256 BUILD=mq WRK=0 RXQ=8 PAGES=512 test_multi_flows
+MACHINE=m6g.medium CONF=ipsec MTU=200 FORKS=16 FLOWS=1 AES=256 BUILD=mq WRK=0 RXQ=8 PAGES=512 test_multi_flows
+MACHINE=m6g.medium CONF=ipsec MTU=200 FORKS=32 FLOWS=1 AES=256 BUILD=mq WRK=0 RXQ=8 PAGES=512 test_multi_flows
 
 
 
