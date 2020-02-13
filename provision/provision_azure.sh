@@ -224,7 +224,7 @@ create_machine ()
 
 print_ssh_commands ()
 {
-  EXTIP=$(az vm list-ip-addresses -g nsk.resources2 -n bastion | grep ipAddress | cut -d '"' -f 4)
+  EXTIP=$(az vm list-ip-addresses -g $RESOURCE_GROUP -n bastion | grep ipAddress | cut -d '"' -f 4)
   echo "To ssh to the machines use :"
   echo "VM1 :: ssh ubuntu@20.0.1.4 -i $SSH_KEYFILE -o ProxyCommand=\"ssh -W %h:%p ubuntu@$EXTIP -i $SSH_KEYFILE\""
   echo "SW1 :: ssh ubuntu@20.0.1.6 -i $SSH_KEYFILE -o ProxyCommand=\"ssh -W %h:%p ubuntu@$EXTIP -i $SSH_KEYFILE\""

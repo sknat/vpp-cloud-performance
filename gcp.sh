@@ -1,10 +1,12 @@
 #!/bin/bash
 
-MTU=${MTU-1500}
+MTU=${MTU-1460}
 WRK=${WRK-1} # N workers
 CP=${CP-""} # compact workers on one thread
 AES=${AES-256} # aes-gcm-128 or aes-gcm-256
 LLQ=${LLQ-""} # 1 ti enable LLQ
+PAGES=${PAGES-1024} # symlink build directory
+RXQ=${RXQ-1}
 
 source $( dirname "${BASH_SOURCE[0]}" )/shared.sh
 
@@ -17,30 +19,26 @@ VM2_IP3_IT=($(ip_it $VM2_IP3 $VM2_LAST_IP3))
 ROUTER_VM2_IP_IT=($(ip_it $ROUTER_VM2_IP $ROUTER_VM2_LAST_IP))
 ROUTER2_VM1_IP_IT=($(ip_it $ROUTER2_VM1_IP $ROUTER2_VM1_LAST_IP))
 
-# IP_CNT=${#VM1_IP_IT[@]}
-IP_CNT=4
+IP_CNT=${#VM1_IP_IT[@]}
+# IP_CNT=4
 
-azure_configure_test_pmd ()
+gcp_configure_test_pmd ()
 {
-  sudo modprobe -a ib_uverbs
-  sudo modprobe mlx4_ib
-  sudo sysctl -w vm.nr_hugepages=1024
-
-  # azure_configure_linux_router $1 # Slow path for now
-  sudo ip addr flush dev $ROUTER_VM1_IF
-  sudo ip addr flush dev $ROUTER_VM2_IF
-  sudo sysctl net.ipv4.ip_forward=0
+  sudo pkill vpp || true
+  sudo modprobe vfio-pci
+  echo 1 | sudo tee /sys/module/vfio/parameters/enable_unsafe_noiommu_mode
+  sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM1_IF_PCI
+  sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM2_IF_PCI
+  sudo sysctl -w vm.nr_hugepages=$PAGES
 
   sudo LD_LIBRARY_PATH=$VPP_LIB_DIR $TESTPMD  \
-    -w $ROUTER_VM1_IF_PCI                     \
-    -w $ROUTER_VM2_IF_PCI                     \
-    --vdev="net_vdev_netvsc0,iface=eth1"      \
-    --vdev="net_vdev_netvsc1,iface=eth2"      \
+    -w $ROUTER_VM1_IF_PCI               \
+    -w $ROUTER_VM2_IF_PCI               \
     -l 0,1,2,3,4,5                            \
     --                                        \
     -i \
-    --eth-peer=2,${AZURE_RT_MAC//[$'\r']}     \
-    --eth-peer=4,${AZURE_RT_MAC//[$'\r']}     \
+    --eth-peer=0,${GCP_RT_MAC//[$'\r']}     \
+    --eth-peer=1,${GCP_RT_MAC//[$'\r']}     \
     -a                                        \
     --forward-mode=mac                        \
     --burst=32                                \
@@ -50,13 +48,16 @@ azure_configure_test_pmd ()
     --nb-cores=$WRK
 }
 
-azure_configure_vm1 ()
+gcp_configure_vm1 ()
 {
   # OK
   sudo ip link set $VM1_IF down
   sudo ip link set $VM1_IF up
   sudo ip addr flush dev $VM1_IF
 
+  sudo ip addr add $VM1_BASE_IP/26 dev $VM1_IF || true
+  sudo arp -i $VM1_IF -s $ROUTER_VM1_IP $ROUTER_VM1_MAC
+  sudo arp -i $VM1_IF -s $VM2_BASE_IP3 $VM2_IF3_MAC
   for ((i = 0; i < $IP_CNT; i++)); do
     sudo ip addr add ${VM1_IP_IT[$i]}/26 dev $VM1_IF || true
   done
@@ -68,7 +69,7 @@ azure_configure_vm1 ()
   sudo ip link set $VM1_IF mtu $MTU
 }
 
-azure_configure_vm2 ()
+gcp_configure_vm2 ()
 {
   if [[ "$1" = "" ]]; then
      echo "please provide zero|one|two"
@@ -90,6 +91,13 @@ azure_configure_vm2 ()
   sudo ip link set $VM2_IF3 up
   sudo ip addr flush dev $VM2_IF3
 
+  sudo ip addr add $VM2_BASE_IP/26 dev $VM2_IF || true
+  sudo ip addr add $VM2_BASE_IP2/26 dev $VM2_IF2 || true
+  sudo ip addr add $VM2_BASE_IP3/26 dev $VM2_IF3 || true
+
+  sudo arp -i $VM2_IF -s $ROUTER2_VM2_IP $ROUTER2_VM2_MAC
+  sudo arp -i $VM2_IF2 -s $ROUTER_VM2_BASE_IP $ROUTER_VM2_MAC
+  sudo arp -i $VM2_IF3 -s $VM1_BASE_IP $VM1_MAC
   for ((i = 0; i < $IP_CNT; i++)); do
     sudo ip addr add ${VM2_IP_IT[$i]}/26 dev $VM2_IF || true
     sudo ip addr add ${VM2_IP2_IT[$i]}/26 dev $VM2_IF2 || true
@@ -109,11 +117,23 @@ azure_configure_vm2 ()
   fi
 
   sudo ip link set $VM2_IF mtu $MTU
+  sudo ip link set $VM2_IF2 mtu $MTU
+  sudo ip link set $VM2_IF3 mtu $MTU
 }
 
-azure_configure_linux_router ()
+gcp_unconfigure_all ()
+{
+  sudo pkill vpp || true
+
+}
+
+gcp_configure_linux_router ()
 {
   # OK
+  sudo ip link set $ROUTER_VM1_IF down
+  sudo ip link set $ROUTER_VM1_IF up
+  sudo ip link set $ROUTER_VM2_IF down
+  sudo ip link set $ROUTER_VM2_IF up
   sudo ip addr flush dev $ROUTER_VM1_IF
   sudo ip addr flush dev $ROUTER_VM2_IF
 
@@ -123,12 +143,18 @@ azure_configure_linux_router ()
 
     sudo ip route add $VM1_IP_PREFIX dev $ROUTER_VM1_IF via $VM1_BASE_IP || true
     sudo ip route add $VM2_IP_PREFIX dev $ROUTER_VM2_IF via $ROUTER2_VM1_BASE_IP || true
+
+    sudo arp -i $ROUTER_VM2_IF -s $ROUTER2_VM1_BASE_IP $GCP_RT_MAC
+    sudo arp -i $ROUTER_VM1_IF -s $VM1_BASE_IP $GCP_RT_MAC
   elif [[ "$1" = "2" ]] ; then
     sudo ip addr add $ROUTER2_VM1_BASE_IP/24 dev $ROUTER_VM1_IF
     sudo ip addr add $ROUTER2_VM2_IP/24 dev $ROUTER_VM2_IF
 
     sudo ip route add $VM1_IP_PREFIX dev $ROUTER_VM1_IF via $ROUTER_VM2_BASE_IP || true
     sudo ip route add $VM2_IP_PREFIX dev $ROUTER_VM2_IF via $VM2_BASE_IP || true
+
+    sudo arp -i $ROUTER_VM2_IF -s $VM2_BASE_IP $GCP_RT_MAC
+    sudo arp -i $ROUTER_VM1_IF -s $ROUTER_VM2_BASE_IP $GCP_RT_MAC
   else
     echo "One hop"
     sudo ip addr add $ROUTER_VM1_IP/24 dev $ROUTER_VM1_IF
@@ -136,6 +162,9 @@ azure_configure_linux_router ()
 
     sudo ip route add $VM1_IP_PREFIX dev $ROUTER_VM1_IF via $VM1_BASE_IP || true
     sudo ip route add $VM2_IP2_PREFIX dev $ROUTER_VM2_IF via $VM2_BASE_IP2 || true
+
+    sudo arp -i $ROUTER_VM2_IF -s $VM2_BASE_IP2 $GCP_RT_MAC
+    sudo arp -i $ROUTER_VM1_IF -s $VM1_BASE_IP $GCP_RT_MAC
   fi
 
   sudo sysctl net.ipv4.ip_forward=1
@@ -144,7 +173,7 @@ azure_configure_linux_router ()
   sudo ip link set $ROUTER_VM2_IF mtu $MTU
 }
 
-install_deps ()
+gcp_install_deps ()
 {
   if [[ "$1" = "vm1" ]] || [[ "$1" = "vm2" ]]; then
     sudo apt update && sudo apt install -y iperf iperf3 traceroute
@@ -157,18 +186,17 @@ install_deps ()
       python \
       linux-tools-$(uname -r) \
       linux-tools-generic \
+      libssl-dev \
       libmnl-dev librdmacm-dev librdmacm1 build-essential libnuma-dev # dpdk
     git clone https://gerrit.fd.io/r/vpp || true
     cd vpp
-    # git fetch "https://gerrit.fd.io/r/vpp" refs/changes/89/24289/1 && git checkout FETCH_HEAD
-    git apply ~/test/patch/mlx4_pmd.patch
+    git apply ~/test/patch/vpp-dpdk.patch
     make install-dep
     make build-release
-    sudo cp ~/test/patch/10-dtap.link /etc/systemd/network/10-dtap.link
   fi
 }
 
-azure_create_vpp_startup_conf ()
+gcp_create_vpp_startup_conf ()
 {
   if [[ "$WRK" = "1" ]]; then
     CORELIST_WORKERS="corelist-workers 1"
@@ -176,6 +204,14 @@ azure_create_vpp_startup_conf ()
     CORELIST_WORKERS="workers 0"
   else
     CORELIST_WORKERS="corelist-workers 1-$WRK"
+  fi
+  ROUTER_VM1_IF_NAME=VM1_IF
+  if [[ "$ROUTER_VM2_IF_PCI" != "" ]]; then
+    ROUTER_VM2_IF_NAME=VM2_IF
+    IF_PCI2="dev $ROUTER_VM2_IF_PCI { name VM2_IF }"
+  else
+    ROUTER_VM2_IF_NAME=VM1_IF
+    IF_PCI2=""
   fi
   sudo mkdir -p $VPP_RUN_DIR
 
@@ -197,32 +233,23 @@ azure_create_vpp_startup_conf ()
       $CORELIST_WORKERS
     }
     dpdk {
-      dev default { num-rx-queues $WRK num-rx-desc 1024 }
-      vdev net_vdev_netvsc0,iface=eth1
-      vdev net_vdev_netvsc2,iface=eth2
+      dev default { num-rx-queues $RXQ num-rx-desc 1024 }
       dev $ROUTER_VM1_IF_PCI { name VM1_IF }
       dev $ROUTER_VM2_IF_PCI { name VM2_IF }
-    }
-    buffers {
-      buffers-per-numa 131072
-      default data-size 4096
     }
   " | sudo tee $VPP_RUN_DIR/vpp.conf > /dev/null
 }
 
-azure_configure_vpp ()
+gcp_configure_vpp ()
 {
   sudo pkill vpp || true
-  sudo modprobe -a ib_uverbs
-  sudo modprobe mlx4_ib
-  sudo sysctl -w vm.nr_hugepages=1024
+  sudo modprobe vfio-pci
+  echo 1 | sudo tee /sys/module/vfio/parameters/enable_unsafe_noiommu_mode
+  sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM1_IF_PCI
+  sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM2_IF_PCI
+  sudo sysctl -w vm.nr_hugepages=$PAGES
 
-  # azure_configure_linux_router $1 # Slow path for now
-  sudo ip addr flush dev $ROUTER_VM1_IF
-  sudo ip addr flush dev $ROUTER_VM2_IF
-  sudo sysctl net.ipv4.ip_forward=0
-
-  azure_create_vpp_startup_conf
+  gcp_create_vpp_startup_conf
 
   echo "
     set int state $ROUTER_VM1_IF_NAME up
@@ -234,8 +261,8 @@ azure_configure_vpp ()
       set int ip addr $ROUTER_VM1_IF_NAME $ROUTER_VM1_IP/24
       set int ip addr $ROUTER_VM2_IF_NAME $ROUTER_VM2_BASE_IP/24
 
-      set ip neighbor $ROUTER_VM1_IF_NAME $VM1_BASE_IP ${AZURE_RT_MAC//[$'\r']}
-      set ip neighbor $ROUTER_VM2_IF_NAME $ROUTER2_VM1_BASE_IP ${AZURE_RT_MAC//[$'\r']}
+      set ip neighbor $ROUTER_VM1_IF_NAME $VM1_BASE_IP ${VM1_MAC//[$'\r']}
+      set ip neighbor $ROUTER_VM2_IF_NAME $ROUTER2_VM1_BASE_IP ${ROUTER2_VM1_MAC//[$'\r']}
 
       ip route add $VM1_IP_PREFIX via $VM1_BASE_IP $ROUTER_VM1_IF_NAME
       ip route add $VM2_IP_PREFIX via $ROUTER2_VM1_BASE_IP $ROUTER_VM2_IF_NAME
@@ -245,8 +272,8 @@ azure_configure_vpp ()
       set int ip addr $ROUTER_VM1_IF_NAME $ROUTER2_VM1_BASE_IP/24
       set int ip addr $ROUTER_VM2_IF_NAME $ROUTER2_VM2_IP/24
 
-      set ip neighbor $ROUTER_VM1_IF_NAME $ROUTER_VM2_BASE_IP ${AZURE_RT_MAC//[$'\r']}
-      set ip neighbor $ROUTER_VM2_IF_NAME $VM2_BASE_IP ${AZURE_RT_MAC//[$'\r']}
+      set ip neighbor $ROUTER_VM1_IF_NAME $ROUTER_VM2_BASE_IP ${ROUTER_VM2_MAC//[$'\r']}
+      set ip neighbor $ROUTER_VM2_IF_NAME $VM2_BASE_IP ${VM2_IF_MAC//[$'\r']}
 
       ip route add $VM1_IP_PREFIX via $ROUTER_VM2_BASE_IP $ROUTER_VM1_IF_NAME
       ip route add $VM2_IP_PREFIX via $VM2_BASE_IP $ROUTER_VM2_IF_NAME
@@ -258,8 +285,8 @@ azure_configure_vpp ()
     " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
     for ((i = 0; i < $IP_CNT; i++)); do
       echo "
-	set ip neighbor $ROUTER_VM1_IF_NAME ${VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
-	set ip neighbor $ROUTER_VM2_IF_NAME ${VM2_IP2_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+	set ip neighbor $ROUTER_VM1_IF_NAME ${VM1_IP_IT[$i]} ${VM1_MAC//[$'\r']}
+	set ip neighbor $ROUTER_VM2_IF_NAME ${VM2_IP2_IT[$i]} ${VM2_IF2_MAC//[$'\r']}
       " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
     done
   fi
@@ -287,19 +314,16 @@ run_vpp ()
   fi
 }
 
-azure_configure_ipsec ()
+gcp_configure_ipsec ()
 {
   sudo pkill vpp || true
-  sudo modprobe -a ib_uverbs
-  sudo modprobe mlx4_ib
-  sudo sysctl -w vm.nr_hugepages=1024
+  sudo modprobe vfio-pci
+  echo 1 | sudo tee /sys/module/vfio/parameters/enable_unsafe_noiommu_mode
+  sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM1_IF_PCI
+  sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM2_IF_PCI
+  sudo sysctl -w vm.nr_hugepages=$PAGES
 
-  # azure_configure_linux_router $1 # Slow path for now
-  sudo ip addr flush dev $ROUTER_VM1_IF
-  sudo ip addr flush dev $ROUTER_VM2_IF
-  sudo sysctl net.ipv4.ip_forward=0
-
-  azure_create_vpp_startup_conf
+  gcp_create_vpp_startup_conf
 
 echo "
     set int st $ROUTER_VM1_IF_NAME up
@@ -312,7 +336,7 @@ echo "
       set int ip addr $ROUTER_VM2_IF_NAME $ROUTER_VM2_BASE_IP/24
 
       ip route add $VM1_IP_PREFIX via $VM1_BASE_IP $ROUTER_VM1_IF_NAME
-      set ip neighbor $ROUTER_VM1_IF_NAME $VM1_BASE_IP ${AZURE_RT_MAC//[$'\r']}
+      set ip neighbor $ROUTER_VM1_IF_NAME $VM1_BASE_IP ${GCP_RT_MAC//[$'\r']}
     " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
 
     for ((i = 0; i < $IP_CNT; i++)); do
@@ -329,8 +353,8 @@ echo "
 	ip route add ${VM2_IP_IT[$i]}/32 via ipip$i
 	set int ip addr $ROUTER_VM2_IF_NAME ${ROUTER_VM2_IP_IT[$i]}/24
 
-	set ip neighbor $ROUTER_VM1_IF_NAME ${VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
-	set ip neighbor $ROUTER_VM2_IF_NAME ${ROUTER2_VM1_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+	set ip neighbor $ROUTER_VM1_IF_NAME ${VM1_IP_IT[$i]} ${GCP_RT_MAC//[$'\r']}
+	set ip neighbor $ROUTER_VM2_IF_NAME ${ROUTER2_VM1_IP_IT[$i]} ${GCP_RT_MAC//[$'\r']}
       " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
     done
 
@@ -341,7 +365,7 @@ echo "
       set int ip addr $ROUTER_VM2_IF_NAME $ROUTER2_VM2_IP/24
 
       ip route add $VM2_IP_PREFIX via $VM2_BASE_IP $ROUTER_VM2_IF_NAME
-      set ip neighbor $ROUTER2_VM2_IF_NAME $VM2_BASE_IP ${AZURE_RT_MAC//[$'\r']}
+      set ip neighbor $ROUTER_VM2_IF_NAME $VM2_BASE_IP ${GCP_RT_MAC//[$'\r']}
     " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
 
     for ((i = 0; i < $IP_CNT; i++)); do
@@ -358,8 +382,8 @@ echo "
 	ip route add ${VM1_IP_IT[$i]}/32 via ipip$i
 	set int ip addr $ROUTER_VM1_IF_NAME ${ROUTER2_VM1_IP_IT[$i]}/24
 
-	set ip neighbor $ROUTER_VM2_IF_NAME ${VM2_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
-	set ip neighbor $ROUTER_VM1_IF_NAME ${ROUTER_VM2_IP_IT[$i]} ${AZURE_RT_MAC//[$'\r']}
+	set ip neighbor $ROUTER_VM2_IF_NAME ${VM2_IP_IT[$i]} ${GCP_RT_MAC//[$'\r']}
+	set ip neighbor $ROUTER_VM1_IF_NAME ${ROUTER_VM2_IP_IT[$i]} ${GCP_RT_MAC//[$'\r']}
       " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
     done
 
@@ -374,20 +398,20 @@ echo "
 aws_test_cli ()
 {
   if [[ "$1" = "install" ]]; then
-    install_deps ${@:2}
+    gcp_install_deps ${@:2}
   elif [[ "$1" = "pmd" ]]; then
-    azure_configure_test_pmd ${@:2}
+    gcp_configure_test_pmd ${@:2}
   elif [[ "$1" = "linux" ]]; then
-    azure_configure_linux_router ${@:2}
+    gcp_configure_linux_router ${@:2}
   elif [[ "$1" = "vpp" ]]; then
-    azure_configure_vpp ${@:2}
+    gcp_configure_vpp ${@:2}
   elif [[ "$1" = "ipsec" ]]; then
-    azure_configure_ipsec ${@:2}
+    gcp_configure_ipsec ${@:2}
   # VM configuration
   elif [[ "$1" = "vm1" ]]; then
-    azure_configure_vm1
+    gcp_configure_vm1
   elif [[ "$1" = "vm2" ]]; then
-    azure_configure_vm2 $2
+    gcp_configure_vm2 $2
   else
     echo "Usage:"
     echo "aws.sh sync                                              - sync this script"
