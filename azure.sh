@@ -144,7 +144,7 @@ azure_configure_linux_router ()
   sudo ip link set $ROUTER_VM2_IF mtu $MTU
 }
 
-install_deps ()
+azure_install_deps ()
 {
   if [[ "$1" = "vm1" ]] || [[ "$1" = "vm2" ]]; then
     sudo apt update && sudo apt install -y iperf iperf3 traceroute
@@ -267,26 +267,6 @@ azure_configure_vpp ()
   run_vpp
 }
 
-run_vpp ()
-{
-  if [[ "$DBG" != "" ]]; then
-    BIN="gdb --args $VPPDBGBIN"
-  else
-    BIN=$VPPBIN
-  fi
-
-  sudo ln -s $VPPCTLBIN /usr/local/bin/vppctl || true
-  sudo DPDK_ENA_LLQ_ENABLE=$LLQ \
-    LD_LIBRARY_PATH=$VPP_LIB_DIR \
-    $BIN -c $VPP_RUN_DIR/vpp.conf
-  if [[ "$CP" != "" ]]; then
-    echo "compacting vpp workers"
-    sleep 1
-    pgrep -w vpp | (local i=0; while read thr; do sudo taskset -p -c $((i/2)) $thr; i=$((i+1)); done)
-    echo "done"
-  fi
-}
-
 azure_configure_ipsec ()
 {
   sudo pkill vpp || true
@@ -374,7 +354,7 @@ echo "
 aws_test_cli ()
 {
   if [[ "$1" = "install" ]]; then
-    install_deps ${@:2}
+    azure_install_deps ${@:2}
   elif [[ "$1" = "pmd" ]]; then
     azure_configure_test_pmd ${@:2}
   elif [[ "$1" = "linux" ]]; then

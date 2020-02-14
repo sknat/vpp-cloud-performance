@@ -247,20 +247,6 @@ aws_configure_vpp ()
   run_vpp
 }
 
-run_vpp ()
-{
-  sudo ln -s $VPPCTLBIN /usr/local/bin/vppctl || true
-  echo "LLQ is $LLQ"
-  sudo DPDK_ENA_LLQ_ENABLE=$LLQ $VPPBIN -c $VPP_RUN_DIR/vpp.conf
-  if [[ "$CP" != "" ]]; then
-    echo "compacting vpp workers"
-    sleep 1
-    pgrep -w vpp | (local i=0; while read thr; do sudo taskset -p -c $((i/2)) $thr; i=$((i+1)); done)
-    echo "done"
-  fi
-  sleep 1
-}
-
 aws_unconfigure_all ()
 {
   sudo pkill vpp || true

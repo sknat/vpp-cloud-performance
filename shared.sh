@@ -43,6 +43,27 @@ run_ () {
   ssh $(whoami)@$1 -i $IDENTITY_FILE -t ${@:2}
 }
 
+run_vpp ()
+{
+  if [[ "$DBG" != "" ]]; then
+    BIN="gdb --args $VPPDBGBIN"
+  else
+    BIN=$VPPBIN
+  fi
+
+  sudo ln -s $VPPCTLBIN /usr/local/bin/vppctl || true
+  sudo DPDK_ENA_LLQ_ENABLE=$LLQ \
+    LD_LIBRARY_PATH=$VPP_LIB_DIR \
+    $BIN -c $VPP_RUN_DIR/vpp.conf
+  if [[ "$CP" != "" ]]; then
+    echo "compacting vpp workers"
+    sleep 1
+    pgrep -w vpp | (local i=0; while read thr; do sudo taskset -p -c $((i/2)) $thr; i=$((i+1)); done)
+    echo "done"
+  fi
+  sleep 1
+}
+
 VPP_DIR=$HOME/vpp
 VPP_RUN_DIR=/run/vpp
 DPDK_DEVBIND=$VPP_DIR/build-root/install-vpp-native/external/sbin/dpdk-devbind
