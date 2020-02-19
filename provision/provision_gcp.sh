@@ -7,6 +7,8 @@ REGION=
 ZONE=
 PREFIX=
 IMAGE=
+VM_SIZE=
+SWITCH_SIZE=
 
 SCRIPTDIR=$(dirname ${BASH_SOURCE[0]})
 if [[ -f $SCRIPTDIR/provision_gcp-conf.sh ]]; then
@@ -83,14 +85,14 @@ create_vm ()
 
 create_vm1 ()
 {
-  create_vm vm1 n1-standard-16 \
+  create_vm vm1 $VM_SIZE \
     --network-interface subnet=$PREFIX-mngmt-subnet,private-network-ip=10.0.1.4 \
     --network-interface subnet=$PREFIX-vm1-sw1-subnet,private-network-ip=10.0.2.11,no-address
 }
 
 create_sw1 ()
 {
-  create_vm sw1 n1-standard-16 \
+  create_vm sw1 $VM_SIZE \
     --network-interface subnet=$PREFIX-mngmt-subnet,private-network-ip=10.0.1.6 \
     --network-interface subnet=$PREFIX-vm1-sw1-subnet,private-network-ip=10.0.2.10,no-address \
     --network-interface subnet=$PREFIX-sw1-sw2-subnet,private-network-ip=10.0.4.10,no-address
@@ -98,7 +100,7 @@ create_sw1 ()
 
 create_sw2 ()
 {
-  create_vm sw2 n1-standard-16 \
+  create_vm sw2 $SWITCH_SIZE \
     --network-interface subnet=$PREFIX-mngmt-subnet,private-network-ip=10.0.1.7 \
     --network-interface subnet=$PREFIX-sw1-sw2-subnet,private-network-ip=10.0.4.12,no-address \
     --network-interface subnet=$PREFIX-sw2-vm2-subnet,private-network-ip=10.0.7.10,no-address
@@ -106,7 +108,7 @@ create_sw2 ()
 
 create_vm2 ()
 {
-  create_vm vm2 n1-standard-16 \
+  create_vm vm2 $SWITCH_SIZE \
     --network-interface subnet=$PREFIX-mngmt-subnet,private-network-ip=10.0.1.5 \
     --network-interface subnet=$PREFIX-sw2-vm2-subnet,private-network-ip=10.0.7.11,no-address \
     --network-interface subnet=$PREFIX-sw1-sw2-subnet,private-network-ip=10.0.4.13,no-address \

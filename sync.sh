@@ -26,6 +26,14 @@ sync ()
   _ssh_cmd $VM2_MANAGEMENT_IP -t '~'"/test/sync.sh local-sync $1"
 }
 
+results ()
+{
+  rsync -avz                      \
+    -e "ssh -i $LOCAL_IDENTITY_FILE -o ProxyCommand=\"ssh -W %h:%p $USERNAME@$BASTION_IP -i $LOCAL_IDENTITY_FILE\" -o \"StrictHostKeyChecking no\" -o \"UserKnownHostsFile /dev/null\"" \
+    $USERNAME@$VM2_MANAGEMENT_IP:~/currentrun/    \
+    $SCRIPTDIR/results/
+}
+
 _local_rsync ()
 {
   rsync -avz                      \
@@ -50,6 +58,7 @@ print_usage ()
 {
   echo "Usage:"
   echo "sync.sh conf_file sync              - sync to vms"
+  echo "sync.sh conf_file results           - get results from vm"
   echo "sync.sh conf_file [vm1|vm2|sw1|sw2] - get a shell in an instance"
 }
 
@@ -68,6 +77,8 @@ sync_cli ()
   shift
   if [[ "$1" = "sync" ]]; then
     sync ${FNAME##*/}
+  elif [[ "$1" = "results" ]]; then
+    results
   elif [[ "$1" = "vm1" ]]; then
     _ssh_cmd $VM1_MANAGEMENT_IP
   elif [[ "$1" = "vm2" ]]; then

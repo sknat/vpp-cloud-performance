@@ -193,7 +193,7 @@ aws_create_vpp_startup_conf ()
     }
     buffers {
       buffers-per-numa 65536
-      default data-size 8192
+      default data-size 4096
     }
   " | sudo tee $VPP_RUN_DIR/vpp.conf > /dev/null
   sudo sysctl -w vm.nr_hugepages=$PAGES
