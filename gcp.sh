@@ -1,12 +1,16 @@
 #!/bin/bash
 
-MTU=${MTU-1460}
-WRK=${WRK-1} # N workers
-CP=${CP-""} # compact workers on one thread
-AES=${AES-256} # aes-gcm-128 or aes-gcm-256
-LLQ=${LLQ-""} # 1 ti enable LLQ
-PAGES=${PAGES-1024} # symlink build directory
-RXQ=${RXQ-1}
+MTU=${MTU:-1400}
+WRK=${WRK:-1} # N workers
+CP=${CP:-""} # compact workers on one thread
+AES=${AES:-256} # aes-gcm-128 or aes-gcm-256
+LLQ=${LLQ:-""} # 1 ti enable LLQ
+PAGES=${PAGES:-1024} # symlink build directory
+RXQ=${RXQ:-1}
+DRIVER=${DRIVER:-""}
+RXD=${RXD:-4096}
+TXD=${TXD:-4096}
+BPN=${BPN:-128} # buffers per numa in K - default 64K
 
 source $( dirname "${BASH_SOURCE[0]}" )/shared.sh
 
@@ -176,7 +180,7 @@ gcp_configure_linux_router ()
 gcp_install_deps ()
 {
   if [[ "$1" = "vm1" ]] || [[ "$1" = "vm2" ]]; then
-    sudo apt update && sudo apt install -y iperf iperf3 traceroute
+    sudo apt update && sudo apt install -y iperf iperf3 traceroute netsniff-ng
   else
     sudo apt update && sudo apt install -y \
       iperf \
@@ -187,6 +191,7 @@ gcp_install_deps ()
       linux-tools-$(uname -r) \
       linux-tools-generic \
       libssl-dev \
+      netsniff-ng \
       libmnl-dev librdmacm-dev librdmacm1 build-essential libnuma-dev # dpdk
     git clone https://gerrit.fd.io/r/vpp || true
     cd vpp
@@ -232,29 +237,61 @@ gcp_create_vpp_startup_conf ()
       main-core 0
       $CORELIST_WORKERS
     }
-    dpdk {
-      dev default { num-rx-queues $RXQ num-rx-desc 1024 }
-      dev $ROUTER_VM1_IF_PCI { name VM1_IF }
-      dev $ROUTER_VM2_IF_PCI { name VM2_IF }
+    buffers {
+      buffers-per-numa $((BPN << 10))
+      default data-size 4096
     }
   " | sudo tee $VPP_RUN_DIR/vpp.conf > /dev/null
+  if [[ "$DRIVER" = "native" ]]; then
+    echo "
+      plugins {
+      	plugin dpdk_plugin.so { disable }
+      }
+    " | sudo tee -a $VPP_RUN_DIR/vpp.conf > /dev/null
+  else
+    echo "
+      dpdk {
+	dev default {
+          num-rx-queues $RXQ
+          num-rx-desc $RXD
+          num-tx-desc $RXD
+	}
+	dev $ROUTER_VM1_IF_PCI { name VM1_IF }
+	$IF_PCI2
+      }
+    " | sudo tee -a $VPP_RUN_DIR/vpp.conf > /dev/null
+  fi
 }
 
 gcp_configure_vpp ()
 {
   sudo pkill vpp || true
-  sudo modprobe vfio-pci
+  sudo modprobe vfio_pci
   echo 1 | sudo tee /sys/module/vfio/parameters/enable_unsafe_noiommu_mode
   sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM1_IF_PCI
-  sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM2_IF_PCI
+  if [[ "$ROUTER_VM2_IF_PCI" != "" ]]; then
+    sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM2_IF_PCI
+  fi
   sudo sysctl -w vm.nr_hugepages=$PAGES
 
   gcp_create_vpp_startup_conf
 
+  echo "" | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
+  if [[ "$DRIVER" = "native" ]]; then
+    ROUTER_VM1_IF_NAME=virtio-0/0/5/0
+    ROUTER_VM2_IF_NAME=virtio-0/0/6/0
+    echo "
+      create interface virtio $ROUTER_VM1_IF_PCI
+      create interface virtio $ROUTER_VM2_IF_PCI
+      set int st $ROUTER_VM1_IF_NAME up
+      set int st $ROUTER_VM2_IF_NAME up
+    " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
+  fi
+
   echo "
     set int state $ROUTER_VM1_IF_NAME up
     set int state $ROUTER_VM2_IF_NAME up
-  " | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
+  " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
 
   if [[ "$1" = "1" ]] ; then
     echo "
@@ -297,18 +334,32 @@ gcp_configure_vpp ()
 gcp_configure_ipsec ()
 {
   sudo pkill vpp || true
-  sudo modprobe vfio-pci
+  sudo modprobe vfio_pci
   sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM1_IF_PCI
-  sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM2_IF_PCI
+  if [[ "$ROUTER_VM2_IF_PCI" != "" ]]; then
+    sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM2_IF_PCI
+  fi
   echo 1 | sudo tee /sys/module/vfio/parameters/enable_unsafe_noiommu_mode
   sudo sysctl -w vm.nr_hugepages=$PAGES
 
   gcp_create_vpp_startup_conf
 
+  echo "" | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
+  if [[ "$DRIVER" = "native" ]]; then
+    ROUTER_VM1_IF_NAME=virtio-0/0/5/0
+    ROUTER_VM2_IF_NAME=virtio-0/0/6/0
+    echo "
+      create interface virtio $ROUTER_VM1_IF_PCI
+      create interface virtio $ROUTER_VM2_IF_PCI
+      set int st $ROUTER_VM1_IF_NAME up
+      set int st $ROUTER_VM2_IF_NAME up
+    " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
+  fi
+
   echo "
     set int st $ROUTER_VM1_IF_NAME up
     set int st $ROUTER_VM2_IF_NAME up
-  " | sudo tee $VPP_RUN_DIR/startup.conf > /dev/null
+  " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
 
   if [[ "$1" = "1" ]] ; then
     echo "

@@ -1,14 +1,14 @@
 #!/bin/bash
 
-MTU=${MTU-1500}
-WRK=${WRK-4} # N workers
-CP=${CP-""} # compact workers on one thread
-AES=${AES-256} # aes-gcm-128 or aes-gcm-256
-LLQ=${LLQ-""} # 1 ti enable LLQ
-DRIVER=${DRIVER-""} # 'uio' or vfio-pci as default
-BUILD=${BUILD-""} # symlink build directory
-PAGES=${PAGES-1024} # symlink build directory
-RXQ=${RXQ-1}
+MTU=${MTU:-1500}
+WRK=${WRK:-4} # N workers
+CP=${CP:-""} # compact workers on one thread
+AES=${AES:-256} # aes-gcm-128 or aes-gcm-256
+LLQ=${LLQ:-""} # 1 ti enable LLQ
+DRIVER=${DRIVER:-""} # 'uio' or vfio-pci as default
+BUILD=${BUILD:-""} # symlink build directory
+PAGES=${PAGES:-1024} # symlink build directory
+RXQ=${RXQ:-1}
 
 source $( dirname "${BASH_SOURCE[0]}" )/shared.sh
 

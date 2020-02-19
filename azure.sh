@@ -1,10 +1,10 @@
 #!/bin/bash
 
-MTU=${MTU-1500}
-WRK=${WRK-1} # N workers
-CP=${CP-""} # compact workers on one thread
-AES=${AES-256} # aes-gcm-128 or aes-gcm-256
-LLQ=${LLQ-""} # 1 ti enable LLQ
+MTU=${MTU:-1500}
+WRK=${WRK:-1} # N workers
+CP=${CP:-""} # compact workers on one thread
+AES=${AES:-256} # aes-gcm-128 or aes-gcm-256
+LLQ=${LLQ:-""} # 1 ti enable LLQ
 
 source $( dirname "${BASH_SOURCE[0]}" )/shared.sh
 

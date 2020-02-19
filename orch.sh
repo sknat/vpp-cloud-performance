@@ -31,7 +31,7 @@ configure_vms ()
 
 run_switch_ ()
 {
-  run_ $1 "WRK=$WRK AES=$AES RXQ=$RXQ BUILD=$BUILD PAGES=$PAGES $TARGET ${@:2}"
+  run_ $1 "WRK=$WRK AES=$AES RXQ=$RXQ RXD=$RXD TXD=$TXD DRIVER=$DRIVER BUILD=$BUILD PAGES=$PAGES $TARGET ${@:2}"
 }
 
 run_switch1 ()
@@ -91,21 +91,25 @@ test_multi_flows () # MTU, FORKS, FLOWS, CONF=zero|linux|vpp|pmd|linux-linux|vpp
 
 get_test_name ()
 {
-  echo $MACHINE/$CONF$AES$BUILD.${WRK}w.mtu$MTU.${FORKS}tP$FLOWS
+  echo $MACHINE/$CONF$AES$BUILD$DRIVER.${WRK}w.mtu$MTU.${FORKS}tP$FLOWS
 }
 
-TARGET=./test/aws.sh
+TARGET=./test/gcp.sh
 
 # MACHINE=m6g.medium CONF=vpp-vpp MTU=1500 FORKS=1  FLOWS=1  BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
 # MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=1  FLOWS=1 AES=256 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
 
-MACHINE=m6g.medium CONF=ipsec MTU=200 FORKS=1  FLOWS=1 AES=256 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-MACHINE=m6g.medium CONF=ipsec MTU=200 FORKS=16 FLOWS=1 AES=256 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-MACHINE=m6g.medium CONF=ipsec MTU=200 FORKS=32 FLOWS=1 AES=256 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
+MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=1  FLOWS=1  AES=256 WRK=1 RXQ=2 test_multi_flows
+MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=1  FLOWS=16 AES=256 WRK=1 RXQ=2 test_multi_flows
+MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=16 FLOWS=16 AES=256 WRK=1 RXQ=2 test_multi_flows
+MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=32 FLOWS=1  AES=256 WRK=1 RXQ=2 test_multi_flows
+MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=32 FLOWS=16 AES=256 WRK=1 RXQ=2 test_multi_flows
 
-MACHINE=m6g.medium CONF=ipsec MTU=200 FORKS=1  FLOWS=1 AES=256 BUILD=mq WRK=0 RXQ=8 PAGES=512 test_multi_flows
-MACHINE=m6g.medium CONF=ipsec MTU=200 FORKS=16 FLOWS=1 AES=256 BUILD=mq WRK=0 RXQ=8 PAGES=512 test_multi_flows
-MACHINE=m6g.medium CONF=ipsec MTU=200 FORKS=32 FLOWS=1 AES=256 BUILD=mq WRK=0 RXQ=8 PAGES=512 test_multi_flows
+MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=1  FLOWS=1  AES=256 WRK=1 RXQ=2 DRIVER=native test_multi_flows
+MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=1  FLOWS=16 AES=256 WRK=1 RXQ=2 DRIVER=native test_multi_flows
+MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=16 FLOWS=16 AES=256 WRK=1 RXQ=2 DRIVER=native test_multi_flows
+MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=32 FLOWS=1  AES=256 WRK=1 RXQ=2 DRIVER=native test_multi_flows
+MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=32 FLOWS=16 AES=256 WRK=1 RXQ=2 DRIVER=native test_multi_flows
 
 
 
