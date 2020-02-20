@@ -268,10 +268,8 @@ gcp_configure_vpp ()
   sudo pkill vpp || true
   sudo modprobe vfio_pci
   echo 1 | sudo tee /sys/module/vfio/parameters/enable_unsafe_noiommu_mode
-  sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM1_IF_PCI
-  if [[ "$ROUTER_VM2_IF_PCI" != "" ]]; then
-    sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM2_IF_PCI
-  fi
+  bind_to $ROUTER_VM1_IF_PCI vfio-pci
+  bind_to $ROUTER_VM2_IF_PCI vfio-pci
   sudo sysctl -w vm.nr_hugepages=$PAGES
 
   gcp_create_vpp_startup_conf
@@ -335,11 +333,9 @@ gcp_configure_ipsec ()
 {
   sudo pkill vpp || true
   sudo modprobe vfio_pci
-  sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM1_IF_PCI
-  if [[ "$ROUTER_VM2_IF_PCI" != "" ]]; then
-    sudo $DPDK_DEVBIND --force -b vfio-pci $ROUTER_VM2_IF_PCI
-  fi
   echo 1 | sudo tee /sys/module/vfio/parameters/enable_unsafe_noiommu_mode
+  bind_to $ROUTER_VM1_IF_PCI vfio-pci
+  bind_to $ROUTER_VM2_IF_PCI vfio-pci
   sudo sysctl -w vm.nr_hugepages=$PAGES
 
   gcp_create_vpp_startup_conf

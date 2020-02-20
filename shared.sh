@@ -64,6 +64,15 @@ run_vpp ()
   sleep 1
 }
 
+function bind_to ()
+{
+  local pci=$1
+  local driver=$2
+  if [[ $pci != "" ]]; then
+    sudo $DPDK_DEVBIND --force -b vfio-pci $pci
+  fi
+}
+
 VPP_DIR=$HOME/vpp
 VPP_RUN_DIR=/run/vpp
 DPDK_DEVBIND=$VPP_DIR/build-root/install-vpp-native/external/sbin/dpdk-devbind
