@@ -94,14 +94,14 @@ clear_test ()
   run_ $ROUTER2_MANAGEMENT_IP "rm -rf ~/currentrun/$1"
   run_ $VM1_MANAGEMENT_IP "rm -rf ~/currentrun/$1"
   rm -rf ~/currentrun/$1
-  echo "Removed test ~/currentrun/$1"
+  >&2 echo "Removed test ~/currentrun/$1"
 }
 
 trap_exit ()
 {
   run_ $VM1_MANAGEMENT_IP "~/test/test.sh stop-server" > /dev/null 2>&1
   rm ~/iperf3.*pid
-  echo "Test aborted"
+  >&2 echo "Test aborted"
 }
 
 start_parallel_clients ()
@@ -115,13 +115,13 @@ start_parallel_clients ()
 
   trap trap_exit 2
 
-  echo "-- Starting test $NAME --"
-  echo "${FORKS} x iperf3"
-  echo "${FLOWS} flows"
-  echo "${TIME}s duration"
-  echo "${NRUN} runs"
-  if [[ "$BIDI" != "" ]]; then echo "bidirectional" ; fi
-  echo "-------------------------"
+  >&2 echo "-- Starting test $NAME --"
+  >&2 echo "${FORKS} x iperf3"
+  >&2 echo "${FLOWS} flows"
+  >&2 echo "${TIME}s duration"
+  >&2 echo "${NRUN} runs"
+  if [[ "$BIDI" != "" ]]; then >&2 echo "bidirectional" ; fi
+  >&2 echo "-------------------------"
 
   RESULTS=()
   for RUN in $(seq $NRUN) ; do
@@ -164,7 +164,7 @@ start_parallel_clients ()
   echo "${NAME} run #${RUN} DONE at ${BPS} Gbits/s"
   RESULTS+=($BPS)
   done
-  echo -e "Results :: "$(join_by '\t' ${RESULTS[@]} | sed "s/\./,/g")
+  echo -e $(join_by ';' ${RESULTS[@]} | sed "s/\./,/g")
   rsync -avz -e "ssh -i $IDENTITY_FILE" $(whoami)@$ROUTER_MANAGEMENT_IP:~/currentrun/ ./currentrun > /dev/null 2>&1
   rsync -avz -e "ssh -i $IDENTITY_FILE" $(whoami)@$ROUTER2_MANAGEMENT_IP:~/currentrun/ ./currentrun > /dev/null 2>&1
   rsync -avz -e "ssh -i $IDENTITY_FILE" $(whoami)@$VM1_MANAGEMENT_IP:~/currentrun/ ./currentrun > /dev/null 2>&1

@@ -18,6 +18,7 @@ sync ()
     --exclude=currentrun          \
     --exclude=results             \
     --exclude=.*                  \
+    --include=orch-conf.sh        \
     --include=$1                  \
     --exclude=*-conf.sh           \
     $SCRIPTDIR/                   \

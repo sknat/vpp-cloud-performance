@@ -2,6 +2,11 @@
 
 source $( dirname "${BASH_SOURCE[0]}" )/shared.sh
 
+ONE_RUN_LOGFILE=/tmp/vpp-orch-one.log
+RUN_LOGFILE=/tmp/vpp-orch.log
+SW1_STARTUP_TMPFILE=/tmp/vpp-startup-sw1.log
+SW2_STARTUP_TMPFILE=/tmp/vpp-startup-sw2.log
+
 configure_vms ()
 {
   local _conf
@@ -37,25 +42,25 @@ run_switch_ ()
 run_switch1 ()
 {
   mkdir -p ~/currentrun/$name
-  run_switch_ $ROUTER_MANAGEMENT_IP "${@}" > /tmp/vpp-startup-sw1.log 2>&1
+  run_switch_ $ROUTER_MANAGEMENT_IP "${@}" > $SW1_STARTUP_TMPFILE 2>&1
 }
 
 run_switch2 ()
 {
-  run_switch_ $ROUTER2_MANAGEMENT_IP "${@}" > /tmp/vpp-startup-sw2.log 2>&1
+  run_switch_ $ROUTER2_MANAGEMENT_IP "${@}" > $SW2_STARTUP_TMPFILE 2>&1
 }
 
 move_startup_logs ()
 {
   local name=$(get_test_name)
-  mv /tmp/vpp-startup-sw1.log ~/currentrun/$name/startup-sw1.log
-  mv /tmp/vpp-startup-sw2.log ~/currentrun/$name/startup-sw2.log
+  mv $SW1_STARTUP_TMPFILE ~/currentrun/$name/startup-sw1.log
+  mv $SW2_STARTUP_TMPFILE ~/currentrun/$name/startup-sw2.log
 }
 
 configure_switches () # WRK
 {
   if [[ "$CONF" = "zero" ]]; then
-    echo "zero conf"
+    >&2 echo "No conf"
   elif [[ "$CONF" = "linux" ]]; then
     run_switch1 "linux"
   elif [[ "$CONF" = "pmd" ]]; then
@@ -80,49 +85,40 @@ configure_switches () # WRK
   fi
 }
 
+append_test_results ()
+{
+  local bps=$(tail -n1 $ONE_RUN_LOGFILE)
+  local vpp=master
+  echo "$MTU;$MACHINE;$FORKS;$FLOWS;$CONF;$WRK;$AES;$vpp;$DRIVER;;;$bps" >> $RUN_LOGFILE
+}
+
 test_multi_flows () # MTU, FORKS, FLOWS, CONF=zero|linux|vpp|pmd|linux-linux|vpp-vpp|ipsec, NAME
 {
   echo "Conguring test $MACHINE/$CONF$AES.${WRK}w.mtu$MTU"
   configure_vms
   configure_switches
-  ./test/test.sh ptest $(get_test_name) || true
+  ./test/test.sh ptest $(get_test_name) > $ONE_RUN_LOGFILE || true
+  append_test_results
   move_startup_logs
+  cat $ONE_RUN_LOGFILE
+  rm $ONE_RUN_LOGFILE
 }
 
 get_test_name ()
 {
-  echo $MACHINE/$CONF$AES$BUILD$DRIVER.${WRK}w.mtu$MTU.${FORKS}tP$FLOWS
+  echo $MACHINE/$CONF.${FORKS}t.P$FLOWS.${WRK}w.mtu$MTU.aes$AES.build$BUILD.driver$DRIVER
 }
 
-TARGET=./test/gcp.sh
+orch_cli ()
+{
+  rm -f $RUN_LOGFILE
+  if [[ -f $( dirname "${BASH_SOURCE[0]}" )/orch-conf.sh ]]; then
+    source $( dirname "${BASH_SOURCE[0]}" )/orch-conf.sh
+  else
+    echo "Add test run configuration in $( dirname "${BASH_SOURCE[0]}" )/orch-conf.sh"
+    exit 1
+  fi
+  echo "Done, go check $RUN_LOGFILE"
+}
 
-# MACHINE=m6g.medium CONF=vpp-vpp MTU=1500 FORKS=1  FLOWS=1  BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-# MACHINE=m6g.medium CONF=ipsec MTU=1500 FORKS=1  FLOWS=1 AES=256 BUILD=arm WRK=0 RXQ=8 PAGES=512 test_multi_flows
-
-MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=1  FLOWS=1  AES=256 WRK=1 RXQ=2 test_multi_flows
-MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=1  FLOWS=16 AES=256 WRK=1 RXQ=2 test_multi_flows
-MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=16 FLOWS=16 AES=256 WRK=1 RXQ=2 test_multi_flows
-MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=32 FLOWS=1  AES=256 WRK=1 RXQ=2 test_multi_flows
-MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=32 FLOWS=16 AES=256 WRK=1 RXQ=2 test_multi_flows
-
-MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=1  FLOWS=1  AES=256 WRK=1 RXQ=2 DRIVER=native test_multi_flows
-MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=1  FLOWS=16 AES=256 WRK=1 RXQ=2 DRIVER=native test_multi_flows
-MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=16 FLOWS=16 AES=256 WRK=1 RXQ=2 DRIVER=native test_multi_flows
-MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=32 FLOWS=1  AES=256 WRK=1 RXQ=2 DRIVER=native test_multi_flows
-MACHINE=n1std16 CONF=ipsec MTU=1400 FORKS=32 FLOWS=16 AES=256 WRK=1 RXQ=2 DRIVER=native test_multi_flows
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+orch_cli $@
