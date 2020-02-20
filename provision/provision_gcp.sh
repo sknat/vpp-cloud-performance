@@ -220,13 +220,34 @@ create_all ()
   create_bastion
 }
 
+create_trafgen_test ()
+{
+  create_subnet trafgen 10.0.0.0/24
+  create_firewall_rule internal trafgen 10.0.0.0/24
+  create_firewall_rule ssh-in trafgen 0.0.0.0/0 --rules=tcp:22
+
+  create_vm ins10 n1-standard-32 \
+    --network-interface subnet=$PREFIX-trafgen-subnet,private-network-ip=10.0.0.10
+  create_vm ins11 n1-standard-32 \
+    --network-interface subnet=$PREFIX-trafgen-subnet,private-network-ip=10.0.0.11
+  create_vm ins12 n1-standard-16 \
+    --network-interface subnet=$PREFIX-trafgen-subnet,private-network-ip=10.0.0.12
+  create_vm ins13 n1-standard-8 \
+    --network-interface subnet=$PREFIX-trafgen-subnet,private-network-ip=10.0.0.13
+}
+
 if [[ "$1" = "create" ]]; then
   check_params
   create_all
+elif [[ "$1" = "trafgen" ]]; then
+  check_params
+  create_trafgen_test
 elif [[ "$1" = "ssh" ]]; then
   check_params
 else
   echo "Usage:"
   echo "./provision_azure.sh create"
+  echo "./provision_azure.sh trafgen"
   echo "./provision_azure.sh ssh"
 fi
+
