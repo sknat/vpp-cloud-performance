@@ -1,0 +1,144 @@
+diff --git a/src/plugins/ikev2/ikev2.c b/src/plugins/ikev2/ikev2.c
+index a647784e3..3caae2fb4 100644
+--- a/src/plugins/ikev2/ikev2.c
++++ b/src/plugins/ikev2/ikev2.c
+@@ -1540,13 +1540,13 @@ ikev2_add_tunnel_from_main (ikev2_add_ipsec_tunnel_args_t * a)
+ 			       IPSEC_PROTOCOL_ESP, a->encr_type,
+ 			       &a->loc_ckey, a->integ_type, &a->loc_ikey,
+ 			       a->flags, 0, a->salt_local, &a->local_ip,
+-			       &a->remote_ip, NULL);
++			       &a->remote_ip, ~0, NULL);
+   rv |= ipsec_sa_add_and_lock (a->remote_sa_id, a->remote_spi,
+ 			       IPSEC_PROTOCOL_ESP, a->encr_type, &a->rem_ckey,
+ 			       a->integ_type, &a->rem_ikey,
+ 			       (a->flags | IPSEC_SA_FLAG_IS_INBOUND), 0,
+ 			       a->salt_remote, &a->remote_ip,
+-			       &a->local_ip, NULL);
++			       &a->local_ip, ~0, NULL);
+ 
+   u32 *sas_in = NULL;
+   vec_add1 (sas_in, a->remote_sa_id);
+diff --git a/src/vnet/ipsec/ipsec_api.c b/src/vnet/ipsec/ipsec_api.c
+index c7ce3ef83..c4913abf6 100644
+--- a/src/vnet/ipsec/ipsec_api.c
++++ b/src/vnet/ipsec/ipsec_api.c
+@@ -372,7 +372,7 @@ static void vl_api_ipsec_sad_entry_add_del_t_handler
+ 				crypto_alg, &crypto_key,
+ 				integ_alg, &integ_key, flags,
+ 				0, mp->entry.salt, &tun_src, &tun_dst,
+-				&sa_index);
++				~0, &sa_index);
+   else
+     rv = ipsec_sa_unlock_id (id);
+ 
+@@ -662,7 +662,7 @@ vl_api_ipsec_tunnel_if_add_del_t_handler (vl_api_ipsec_tunnel_if_add_del_t *
+ 				  &integ_key,
+ 				  (flags | IPSEC_SA_FLAG_IS_INBOUND),
+ 				  ntohl (mp->tx_table_id),
+-				  mp->salt, &remote_ip, &local_ip, NULL);
++				  mp->salt, &remote_ip, &local_ip, ~0, NULL);
+ 
+       if (rv)
+ 	goto done;
+@@ -676,7 +676,7 @@ vl_api_ipsec_tunnel_if_add_del_t_handler (vl_api_ipsec_tunnel_if_add_del_t *
+ 				  &integ_key,
+ 				  flags,
+ 				  ntohl (mp->tx_table_id),
+-				  mp->salt, &local_ip, &remote_ip, NULL);
++				  mp->salt, &local_ip, &remote_ip, ~0, NULL);
+ 
+       if (rv)
+ 	goto done;
+diff --git a/src/vnet/ipsec/ipsec_cli.c b/src/vnet/ipsec/ipsec_cli.c
+index 1ab8bd99d..a75f91af4 100644
+--- a/src/vnet/ipsec/ipsec_cli.c
++++ b/src/vnet/ipsec/ipsec_cli.c
+@@ -83,6 +83,7 @@ ipsec_sa_add_del_command_fn (vlib_main_t * vm,
+   ipsec_integ_alg_t integ_alg;
+   ipsec_protocol_t proto;
+   ipsec_sa_flags_t flags;
++  u32 sa_thread = ~0;
+   clib_error_t *error;
+   ipsec_key_t ck = { 0 };
+   ipsec_key_t ik = { 0 };
+@@ -122,6 +123,8 @@ ipsec_sa_add_del_command_fn (vlib_main_t * vm,
+ 	;
+       else if (unformat (line_input, "integ-key %U", unformat_ipsec_key, &ik))
+ 	;
++      else if (unformat (line_input, "thread %u", &sa_thread))
++	;
+       else if (unformat (line_input, "integ-alg %U",
+ 			 unformat_ipsec_integ_alg, &integ_alg))
+ 	;
+@@ -149,7 +152,7 @@ ipsec_sa_add_del_command_fn (vlib_main_t * vm,
+     rv = ipsec_sa_add_and_lock (id, spi, proto, crypto_alg,
+ 				&ck, integ_alg, &ik, flags,
+ 				0, clib_host_to_net_u32 (salt),
+-				&tun_src, &tun_dst, NULL);
++				&tun_src, &tun_dst, sa_thread, NULL);
+   else
+     rv = ipsec_sa_unlock_id (id);
+ 
+@@ -852,14 +855,14 @@ create_ipsec_tunnel_command_fn (vlib_main_t * vm,
+ 			       local_spi, IPSEC_PROTOCOL_ESP, crypto_alg,
+ 			       &lck, integ_alg, &lik, flags, table_id,
+ 			       clib_host_to_net_u32 (salt), &local_ip,
+-			       &remote_ip, NULL);
++			       &remote_ip, ~0, NULL);
+       rv |=
+ 	ipsec_sa_add_and_lock (ipsec_tun_mk_remote_sa_id (sw_if_index),
+ 			       remote_spi, IPSEC_PROTOCOL_ESP, crypto_alg,
+ 			       &rck, integ_alg, &rik,
+ 			       (flags | IPSEC_SA_FLAG_IS_INBOUND), table_id,
+ 			       clib_host_to_net_u32 (salt), &remote_ip,
+-			       &local_ip, NULL);
++			       &local_ip, ~0, NULL);
+       rv |=
+ 	ipsec_tun_protect_update_one (sw_if_index, &nh,
+ 				      ipsec_tun_mk_local_sa_id (sw_if_index),
+diff --git a/src/vnet/ipsec/ipsec_sa.c b/src/vnet/ipsec/ipsec_sa.c
+index 4401c2e3d..3287eb922 100644
+--- a/src/vnet/ipsec/ipsec_sa.c
++++ b/src/vnet/ipsec/ipsec_sa.c
+@@ -135,7 +135,9 @@ ipsec_sa_add_and_lock (u32 id,
+ 		       u32 tx_table_id,
+ 		       u32 salt,
+ 		       const ip46_address_t * tun_src,
+-		       const ip46_address_t * tun_dst, u32 * sa_out_index)
++		       const ip46_address_t * tun_dst,
++		       u32 sa_thread,
++		       u32 * sa_out_index)
+ {
+   vlib_main_t *vm = vlib_get_main ();
+   ipsec_main_t *im = &ipsec_main;
+@@ -163,8 +165,16 @@ ipsec_sa_add_and_lock (u32 id,
+   sa->protocol = proto;
+   sa->flags = flags;
+   sa->salt = salt;
+-  sa->encrypt_thread_index = (vlib_num_workers ())? ~0 : 0;
+-  sa->decrypt_thread_index = (vlib_num_workers ())? ~0 : 0;
++  if (sa_thread == (u32) ~0)
++    {
++      sa->encrypt_thread_index = (vlib_num_workers ())? ~0 : 0;
++      sa->decrypt_thread_index = (vlib_num_workers ())? ~0 : 0;
++    }
++  else
++    {
++      sa->encrypt_thread_index = sa_thread % (vlib_num_workers () + 1);
++      sa->decrypt_thread_index = sa_thread % (vlib_num_workers () + 1);
++    }
+   if (integ_alg != IPSEC_INTEG_ALG_NONE)
+     {
+       ipsec_sa_set_integ_alg (sa, integ_alg);
+diff --git a/src/vnet/ipsec/ipsec_sa.h b/src/vnet/ipsec/ipsec_sa.h
+index e0d74e130..cda80685a 100644
+--- a/src/vnet/ipsec/ipsec_sa.h
++++ b/src/vnet/ipsec/ipsec_sa.h
+@@ -209,6 +209,7 @@ extern int ipsec_sa_add_and_lock (u32 id,
+ 				  u32 salt,
+ 				  const ip46_address_t * tunnel_src_addr,
+ 				  const ip46_address_t * tunnel_dst_addr,
++				  u32 sa_thread,
+ 				  u32 * sa_index);
+ extern index_t ipsec_sa_find_and_lock (u32 id);
+ extern int ipsec_sa_unlock_id (u32 id);
