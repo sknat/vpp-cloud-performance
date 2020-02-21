@@ -45,7 +45,7 @@ run_ () {
 
 run_vpp ()
 {
-  if [[ "$DBG" != "" ]]; then
+  if [[ "$GDB" != "" ]]; then
     BIN="gdb --args $VPPDBGBIN"
   else
     BIN=$VPPBIN

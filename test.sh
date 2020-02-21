@@ -67,6 +67,10 @@ show_run ()
   sudo vppctl show run > $FNAME.run
   sudo vppctl show err > $FNAME.err
   sudo vppctl show log > $FNAME.log
+  sudo vppctl show buffers > $FNAME.buf
+  sudo vppctl show int > $FNAME.int
+  sudo vppctl show int rx > $FNAME.intrx
+  sudo vppctl show ipsec all > $FNAME.ipsec
   cp $VPP_RUN_DIR/vpp.conf $FNAME.vpp.conf
   cp $VPP_RUN_DIR/startup.conf $FNAME.vpp.startup.conf
 }
@@ -140,7 +144,7 @@ start_parallel_clients ()
     echo "$!" > ~/iperf3.fork$fork.pid
   done
   for ((fork = 0; fork < $FORKS; fork++)); do
-    wait $(cat ~/iperf3.fork$fork.pid)
+    wait $(cat ~/iperf3.fork$fork.pid) || true
     rm ~/iperf3.fork$fork.pid
   done
   BPS=0
