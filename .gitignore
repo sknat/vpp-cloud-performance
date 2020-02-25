@@ -1,3 +1,5 @@
 results/
 *.log
 *-conf.sh
+drafts/
+conf/

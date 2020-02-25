@@ -6,6 +6,7 @@ ONE_RUN_LOGFILE=/tmp/vpp-orch-one.log
 RUN_LOGFILE=/tmp/vpp-orch.log
 SW1_STARTUP_TMPFILE=/tmp/vpp-startup-sw1.log
 SW2_STARTUP_TMPFILE=/tmp/vpp-startup-sw2.log
+ORCH_CONF_FILE=$( dirname "${BASH_SOURCE[0]}" )/conf/orch
 
 configure_vms ()
 {
@@ -112,10 +113,10 @@ get_test_name ()
 orch_cli ()
 {
   rm -f $RUN_LOGFILE
-  if [[ -f $( dirname "${BASH_SOURCE[0]}" )/orch-conf.sh ]]; then
-    source $( dirname "${BASH_SOURCE[0]}" )/orch-conf.sh
+  if [[ -f $ORCH_CONF_FILE ]]; then
+    source $ORCH_CONF_FILE
   else
-    echo "Add test run configuration in $( dirname "${BASH_SOURCE[0]}" )/orch-conf.sh"
+    echo "Add test run configuration in $ORCH_CONF_FILE"
     exit 1
   fi
   echo "Done, go check $RUN_LOGFILE"

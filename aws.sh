@@ -45,25 +45,51 @@ aws_configure_test_pmd ()
     --nb-cores=4
 }
 
-aws_configure_vm1 ()
+aws_add_vm1_addresses ()
 {
-  NXT_HOP=$1
-  sudo ip link set $VM1_IF down
-  sudo ip link set $VM1_IF up
-  sudo ip addr flush dev $VM1_IF
   for ((i = 0; i < ${IP_CNT}; i++)); do
     sudo ip addr add ${VM1_IP_IT[$i]}/24 dev $VM1_IF || true
   done
   for ((i = 0; i < ${IP_CNT}; i++)); do
     sudo arp -i $VM1_IF -s ${VM2_IP_IT[$i]} ${NXT_HOP//[$'\r']}
   done
+}
+
+aws_configure_vm1 ()
+{
+  if [[ "$1" = "zero" ]]; then
+    NXT_HOP=$VM2_MAC
+  elif [[ "$1" = "one" ]]; then
+    NXT_HOP=$ROUTER_VM1_MAC
+  elif [[ "$1" = "two" ]]; then
+    NXT_HOP=$ROUTER_VM1_MAC
+  else
+    echo "Use zero|one|two"
+    exit 1
+  fi
+
+  sudo ip link set $VM1_IF down
+  sudo ip link set $VM1_IF up
+  sudo ip addr flush dev $VM1_IF
+  aws_add_vm1_addresses
   sudo ip link set $VM1_IF mtu $MTU
   sudo ip route add 20.0.7.0/24 dev $VM1_IF
 }
 
 aws_configure_vm2 ()
 {
-  NXT_HOP=$1
+  if [[ "$1" = "zero" ]]; then
+    NXT_HOP=$VM1_MAC
+  elif [[ "$1" = "one" ]]; then
+    NXT_HOP=$ROUTER_VM2_MAC
+  elif [[ "$1" = "two" ]]; then
+    NXT_HOP=$ROUTER2_VM2_MAC
+  elif [[ "$1" = "loop" ]]; then
+    NXT_HOP=$VM1_MAC
+  else
+    echo "Use zero|one|two|loop"
+    exit 1
+  fi
   sudo ip link set $VM2_IF down
   sudo ip link set $VM2_IF up
   sudo ip addr flush dev $VM2_IF
@@ -73,6 +99,10 @@ aws_configure_vm2 ()
   for ((i = 0; i < ${#VM1_IP_IT[@]}; i++)); do
     sudo arp -i $VM2_IF -s ${VM1_IP_IT[$i]} ${NXT_HOP//[$'\r']}
   done
+  if [[ "$1" = "loop" ]]; then
+    NXT_HOP=$VM2_MAC
+    aws_add_vm1_addresses
+  fi
   sudo ip link set $VM2_IF mtu $MTU
   sudo ip route add 20.0.2.0/24 dev $VM2_IF
 }
@@ -349,19 +379,10 @@ aws_test_cli ()
     aws_symlink_build_dir
     aws_configure_vpp_ipsec ${@:2}
   # VM configuration
-  elif [[ "$1 $2" = "vm1 one" ]]; then
-    aws_configure_vm1 $ROUTER_VM1_MAC
-  elif [[ "$1 $2" = "vm2 one" ]]; then
-    aws_configure_vm2 $ROUTER_VM2_MAC
-  elif [[ "$1 $2" = "vm1 two" ]]; then
-    aws_configure_vm1 $ROUTER_VM1_MAC
-  elif [[ "$1 $2" = "vm2 two" ]]; then
-    aws_configure_vm2 $ROUTER2_VM2_MAC
-  elif [[ "$1 $2" = "vm1 zero" ]]; then
-    aws_configure_vm1 $VM2_MAC
-  elif [[ "$1 $2" = "vm2 zero" ]]; then
-    aws_configure_vm2 $VM1_MAC
-
+  elif [[ "$1" = "vm1" ]]; then
+    aws_configure_vm1 ${@:2}
+  elif [[ "$1" = "vm2" ]]; then
+    aws_configure_vm2 ${@:2}
   else
     echo "Usage:"
     echo "aws.sh install                        - install deps"

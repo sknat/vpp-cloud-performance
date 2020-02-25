@@ -130,7 +130,7 @@ start_parallel_clients ()
   RESULTS=()
   for RUN in $(seq $NRUN) ; do
   run_ $ROUTER_MANAGEMENT_IP "~/test/test.sh clear-run" > /dev/null 2>&1
-  # run_ $ROUTER2_MANAGEMENT_IP "~/test/test.sh clear-run" > /dev/null 2>&1
+  run_ $ROUTER2_MANAGEMENT_IP "~/test/test.sh clear-run" > /dev/null 2>&1
   run_ $VM1_MANAGEMENT_IP "nohup ~/test/test.sh start-server $NAME $RUN $FORKS > /dev/null 2>&1" > /dev/null 2>&1
   for ((fork = 0; fork < $FORKS; fork++)); do
     FNAME=$(get_test_name $NAME $RUN $fork)

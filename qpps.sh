@@ -24,6 +24,7 @@ function main ()
   RX=rx
   BYTES=bytes
   INTERVAL=1
+  COUNT=0
   while (( "$#" )) ; do
       case "$1" in
           rx)
@@ -41,6 +42,10 @@ function main ()
           -i)
 	      shift
 	      INTERVAL=$1
+	      ;;
+	  -c)
+	      shift
+	      COUNT=$1
 	      ;;
           --help)
               print_usage_and_exit
@@ -67,8 +72,8 @@ function main ()
   done
 
   while true; do
-    printf "\033[0;0f"
-    echo "-------$RX on $NIC-------"
+    [ "$COUNT" -eq "1" ] || printf "\033[0;0f"
+    [ "$COUNT" -eq "1" ] || echo "-------$RX on $NIC-------"
     sleep $INTERVAL
     _IFSTATS=()
     local i=0
@@ -77,8 +82,12 @@ function main ()
       echo "${RX}_queue_${i}_${BYTES}: "$(( $x - ${IFSTATS[$i]} ))"                       "
       i=$((i + 1))
     done
-    echo "-------------------------"
+    [ "$COUNT" -eq "1" ] || echo "-------------------------"
     IFSTATS=(${_IFSTATS[@]})
+    if [[ "$COUNT" != "0" ]]; then
+      COUNT=$((COUNT - 1))
+      [ "$COUNT" -eq "0" ] && exit 0
+    fi
   done
 
 }
