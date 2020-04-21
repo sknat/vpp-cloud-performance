@@ -82,6 +82,7 @@ VPPDBGBIN=$VPP_DIR/build-root/install-vpp_debug-native/vpp/bin/vpp
 VPPCTLBIN=$VPP_DIR/build-root/install-vpp-native/vpp/bin/vppctl
 IGB_UIO_KO=$VPP_DIR/build-root/build-vpp-native/external/dpdk-19.08/x86_64-native-linuxapp-gcc/kmod/igb_uio.ko
 VPP_LIB_DIR=$VPP_DIR/build-root/install-vpp-native/external/lib
+LDPRELOAD_PATH=$VPP_DIR/build-root/build-vpp-native/vpp/lib/libvcl_ldpreload.so
 IDENTITY_FILE=$HOME/key.pem
 
 if [[ "$AES" = "256" ]]; then

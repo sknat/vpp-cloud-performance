@@ -1,0 +1,12 @@
+diff --git a/src/plugins/dpdk/device/init.c b/src/plugins/dpdk/device/init.c
+index 86443c8ff..a3231bf5d 100644
+--- a/src/plugins/dpdk/device/init.c
++++ b/src/plugins/dpdk/device/init.c
+@@ -532,6 +532,7 @@ dpdk_lib_init (dpdk_main_t * dm)
+ 	      xd->port_type = VNET_DPDK_PORT_TYPE_ETH_1G;
+ 	      xd->nb_rx_desc = DPDK_NB_RX_DESC_VIRTIO;
+ 	      xd->nb_tx_desc = DPDK_NB_TX_DESC_VIRTIO;
++	      dpdk_enable_l4_csum_offload(xd);
+ 	      break;
+ 
+ 	      /* vmxnet3 */

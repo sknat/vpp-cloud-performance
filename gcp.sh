@@ -10,6 +10,7 @@ RXQ=${RXQ:-1}
 DRIVER=${DRIVER:-""}
 RXD=${RXD:-4096}
 TXD=${TXD:-4096}
+GSO=${GSO:-0}
 BPN=${BPN:-128} # buffers per numa in K - default 64K
 
 source $( dirname "${BASH_SOURCE[0]}" )/shared.sh
@@ -248,15 +249,28 @@ gcp_create_vpp_startup_conf ()
       	plugin dpdk_plugin.so { disable }
       }
     " | sudo tee -a $VPP_RUN_DIR/vpp.conf > /dev/null
-  else
+  elif [[ "$DRIVER" = "both" ]]; then
     echo "
       dpdk {
+      	enable-tcp-udp-checksum
 	dev default {
           num-rx-queues $RXQ
           num-rx-desc $RXD
           num-tx-desc $RXD
 	}
-	dev $ROUTER_VM1_IF_PCI { name VM1_IF }
+	dev $ROUTER_VM1_IF_PCI { name VM1_IF tso on }
+      }
+    " | sudo tee -a $VPP_RUN_DIR/vpp.conf > /dev/null
+  else
+    echo "
+      dpdk {
+      	enable-tcp-udp-checksum
+	dev default {
+          num-rx-queues $RXQ
+          num-rx-desc $RXD
+          num-tx-desc $RXD
+	}
+	dev $ROUTER_VM1_IF_PCI { name VM1_IF tso on }
 	$IF_PCI2
       }
     " | sudo tee -a $VPP_RUN_DIR/vpp.conf > /dev/null
@@ -279,10 +293,16 @@ gcp_configure_vpp ()
     ROUTER_VM1_IF_NAME=virtio-0/0/5/0
     ROUTER_VM2_IF_NAME=virtio-0/0/6/0
     echo "
-      create interface virtio $ROUTER_VM1_IF_PCI
-      create interface virtio $ROUTER_VM2_IF_PCI
-      set int st $ROUTER_VM1_IF_NAME up
-      set int st $ROUTER_VM2_IF_NAME up
+      create interface virtio $ROUTER_VM1_IF_PCI gso-enabled
+      create interface virtio $ROUTER_VM2_IF_PCI gso-enabled
+      set interface feature gso $ROUTER_VM1_IF_NAME enable
+      set interface feature gso $ROUTER_VM1_IF_NAME enable
+    " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
+  elif [[ "$DRIVER" = "both" ]]; then
+    ROUTER_VM2_IF_NAME=virtio-0/0/6/0
+    echo "
+      create interface virtio $ROUTER_VM2_IF_PCI gso-enabled
+      set interface feature gso $ROUTER_VM1_IF_NAME enable
     " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null
   fi
 
@@ -345,8 +365,10 @@ gcp_configure_ipsec ()
     ROUTER_VM1_IF_NAME=virtio-0/0/5/0
     ROUTER_VM2_IF_NAME=virtio-0/0/6/0
     echo "
-      create interface virtio $ROUTER_VM1_IF_PCI
-      create interface virtio $ROUTER_VM2_IF_PCI
+      create interface virtio $ROUTER_VM1_IF_PCI gso-enabled
+      create interface virtio $ROUTER_VM2_IF_PCI gso-enabled
+      set interface feature gso $ROUTER_VM1_IF_NAME enable
+      set interface feature gso $ROUTER_VM2_IF_NAME enable
       set int st $ROUTER_VM1_IF_NAME up
       set int st $ROUTER_VM2_IF_NAME up
     " | sudo tee -a $VPP_RUN_DIR/startup.conf > /dev/null

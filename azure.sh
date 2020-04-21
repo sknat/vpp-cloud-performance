@@ -199,7 +199,7 @@ azure_create_vpp_startup_conf ()
     dpdk {
       dev default { num-rx-queues $WRK num-rx-desc 1024 }
       vdev net_vdev_netvsc0,iface=eth1
-      vdev net_vdev_netvsc2,iface=eth2
+      vdev net_vdev_netvsc1,iface=eth2
       dev $ROUTER_VM1_IF_PCI { name VM1_IF }
       dev $ROUTER_VM2_IF_PCI { name VM2_IF }
     }

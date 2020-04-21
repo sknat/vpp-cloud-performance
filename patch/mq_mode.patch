@@ -1,0 +1,13 @@
+diff --git a/src/plugins/dpdk/device/init.c b/src/plugins/dpdk/device/init.c
+index ac79ac4b6..11356d214 100644
+--- a/src/plugins/dpdk/device/init.c
++++ b/src/plugins/dpdk/device/init.c
+@@ -381,7 +381,7 @@ dpdk_lib_init (dpdk_main_t * dm)
+ 	  && dev_info.max_rx_queues >= devconf->num_rx_queues)
+ 	{
+ 	  xd->rx_q_used = devconf->num_rx_queues;
+-	  xd->port_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
++	  // xd->port_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
+ 	  if (devconf->rss_fn == 0)
+ 	    xd->port_conf.rx_adv_conf.rss_conf.rss_hf =
+ 	      ETH_RSS_IP | ETH_RSS_UDP | ETH_RSS_TCP;

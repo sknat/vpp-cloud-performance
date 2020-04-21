@@ -7,8 +7,20 @@ BIDI=${BIDI-""} # bidirectional iperf3 (one out of two is reversed)
 CONF=${CONF-"two"} # one|two|zero (number of hops for azure vm2 client)
 FORKS=${FORKS-1} # number of parallel iperfs
 FLOWS=${FLOWS-1} # flows per iperf3 (-P#)
+REMOVE_N=${REMOVE_N-5} # remove first & last N seconds
 
 VM1_IP_IT=($(ip_it $VM1_IP $VM1_LAST_IP))
+
+if [[ ( $((TIME)) < $((REMOVE_N * 2 + 10)) ) ]]; then
+  echo "Cannot run for ${TIME}s and remove ${REMOVE_N}s at start and end"
+  exit 1
+fi
+
+ncpus ()
+{
+  cat /proc/cpuinfo | grep processor | wc -l
+}
+NCPUS=$(ncpus)
 
 bindip_for_client_vm ()
 {
@@ -108,6 +120,44 @@ trap_exit ()
   >&2 echo "Test aborted"
 }
 
+get_fork_bit_list ()
+{
+  if [[ "$FLOWS" = "1" ]]; then
+    spattern="sec"
+  else
+    spattern='\[SUM\]'
+  fi
+
+  cat ~/$FNAME.client | \
+    grep $spattern | \
+    egrep -o "[0-9\.]+ [MKG]bits/s" | \
+    sed "s@ Gbits/s@ 1000000000@g" | \
+    sed "s@ Mbits/s@ 1000000@g" | \
+    sed "s@ Kbits/s@ 1000@g" | \
+    awk '{print $1 * $2}' | \
+    tail -n +$((REMOVE_N+1)) | \
+    head -n -2 | \
+    head -n -${REMOVE_N}
+}
+
+get_fork_bits ()
+{
+  get_fork_bit_list | awk '{sum+=$1;} END{print sum;}'
+}
+
+get_fork_cnt ()
+{
+  echo $((TIME - 2 * REMOVE_N))
+}
+
+get_old_bps ()
+{
+    BPSG_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Gbits/s" | egrep -o "[0-9\.]+" || echo "0")
+    BPSM_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Mbits/s" | egrep -o "[0-9\.]+" || echo "0")
+    BPSK_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Kbits/s" | egrep -o "[0-9\.]+" || echo "0")
+    echo $(echo $BPSG_ $BPSM_ $BPSK_ | awk '{print $1 + ($2 / 1000) + ($3 / 1000000)}')
+}
+
 start_parallel_clients ()
 {
   NAME=$1
@@ -140,7 +190,7 @@ start_parallel_clients ()
           REVERSED=""
     fi
     BINDIP=$(bindip_for_client_vm $fork)
-    iperf3 $REVERSED -c ${VM1_IP_IT[$fork]} -B ${BINDIP} -i 1 -t $TIME -P ${FLOWS} ${@:3} --logfile ~/$FNAME.client > /dev/null 2>&1 &
+    iperf3 $REVERSED --cport 400$fork  -c ${VM1_IP_IT[$fork]} -B ${BINDIP} -i 1 -t $TIME -P ${FLOWS} ${@:3} --logfile ~/$FNAME.client > /dev/null 2>&1 &
     echo "$!" > ~/iperf3.fork$fork.pid
   done
   for ((fork = 0; fork < $FORKS; fork++)); do
@@ -148,6 +198,7 @@ start_parallel_clients ()
     rm ~/iperf3.fork$fork.pid
   done
   BPS=0
+  CNT=0
   for ((fork = 0; fork < $FORKS; fork++)); do
     FNAME=$(get_test_name $NAME $RUN $fork)
     if [[ "$BIDI" != "" ]] && [[ $((fork%2)) = 1 ]]; then
@@ -156,13 +207,27 @@ start_parallel_clients ()
       REVERSED=""
     fi
     BINDIP=$(bindip_for_client_vm $fork)
-    echo "iperf3 $REVERSED -c ${VM1_IP_IT[$fork]} -B ${BINDIP} -i 1 -t $TIME -P ${FLOWS} ${@:3}" > ~/$FNAME.cli
+    echo "iperf3 $REVERSED --cport 400$fork -c ${VM1_IP_IT[$fork]} -B ${BINDIP} -i 1 -t $TIME -P ${FLOWS} ${@:3}" > ~/$FNAME.cli
     run_ $VM1_MANAGEMENT_IP "~/test/test.sh stop-server" > /dev/null 2>&1
-    BPSG_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Gbits/s" | egrep -o "[0-9\.]+" || echo "0")
-    BPSM_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Mbits/s" | egrep -o "[0-9\.]+" || echo "0")
-    BPSK_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Kbits/s" | egrep -o "[0-9\.]+" || echo "0")
-    BPS=$(echo $BPS $BPSG_ $BPSM_ $BPSK_ | awk '{print $1 + $2 + ($3 / 1000) + ($4 / 1000000)}')
+    # BPSG_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Gbits/s" | egrep -o "[0-9\.]+" || echo "0")
+    # BPSM_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Mbits/s" | egrep -o "[0-9\.]+" || echo "0")
+    # BPSK_=$(tail -n 3 ~/$FNAME.client | head -1 | egrep -o "[0-9\.]+ Kbits/s" | egrep -o "[0-9\.]+" || echo "0")
+    # BPS=$(echo $BPS $BPSG_ $BPSM_ $BPSK_ | awk '{print $1 + $2 + ($3 / 1000) + ($4 / 1000000)}')
+    CNT=$(get_fork_cnt)
+    FBITS=$(get_fork_bits)
+    if [[ "$FBITS" = "" ]]; then
+    	echo "OOOOOOOOO :: $FNAME"
+    	exit 1
+    fi
+    # echo "FNAME $FNAME"
+    # echo "CNT $CNT"
+    # echo "get_fork_bits $(get_fork_bits)"
+    # echo "get_old_bps $(get_old_bps)"
+    # echo "$FNAME $(echo $(get_fork_bits) $CNT | awk '{print $1 / $2 / 1000000000}')"
+    BPS=$(echo $FBITS $BPS | awk '{print $1 + $2}')
   done
+  # echo "CNT is $CNT"
+  BPS=$(echo $BPS $CNT | awk '{print $1 / $2 / 1000000000}')
   run_ $ROUTER_MANAGEMENT_IP "~/test/test.sh show-run $NAME $RUN .router1" > /dev/null 2>&1
   run_ $ROUTER2_MANAGEMENT_IP "~/test/test.sh show-run $NAME $RUN .router2" > /dev/null 2>&1
   echo "${NAME} run #${RUN} DONE at ${BPS} Gbits/s"
